@@ -1,76 +1,22 @@
 'use client';
 
-import { Search, Filter, ChevronRight, Shield, AlertTriangle, CheckCircle } from 'lucide-react';
+import { Search, Filter, Shield, AlertTriangle, CheckCircle, UserPlus } from 'lucide-react';
 import Link from 'next/link';
+import { useEffect, useMemo, useState } from 'react';
+import { fetchJson } from '@/lib/client-api';
 
-const users = [
-  {
-    id: 'USR-001',
-    name: 'Jonathan Doe',
-    email: 'j.doe@company.com',
-    department: 'Engineering',
-    role: 'Senior Developer',
-    riskScore: 87,
-    status: 'high-risk',
-    lastActive: '5 min ago',
-    alerts: 4,
-  },
-  {
-    id: 'USR-002',
-    name: 'Maria Johnson',
-    email: 'm.johnson@company.com',
-    department: 'DevOps',
-    role: 'Cloud Architect',
-    riskScore: 72,
-    status: 'medium-risk',
-    lastActive: '15 min ago',
-    alerts: 2,
-  },
-  {
-    id: 'USR-003',
-    name: 'Robert Williams',
-    email: 'r.williams@company.com',
-    department: 'Data Science',
-    role: 'Data Engineer',
-    riskScore: 68,
-    status: 'medium-risk',
-    lastActive: '28 min ago',
-    alerts: 1,
-  },
-  {
-    id: 'USR-004',
-    name: 'Karen Brown',
-    email: 'k.brown@company.com',
-    department: 'Security',
-    role: 'Security Analyst',
-    riskScore: 23,
-    status: 'low-risk',
-    lastActive: '45 min ago',
-    alerts: 0,
-  },
-  {
-    id: 'USR-005',
-    name: 'Alex Davis',
-    email: 'a.davis@company.com',
-    department: 'Engineering',
-    role: 'Backend Developer',
-    riskScore: 89,
-    status: 'high-risk',
-    lastActive: '1 hr ago',
-    alerts: 3,
-  },
-  {
-    id: 'USR-006',
-    name: 'Tom Wilson',
-    email: 't.wilson@company.com',
-    department: 'Infrastructure',
-    role: 'SysAdmin',
-    riskScore: 45,
-    status: 'low-risk',
-    lastActive: '2 hr ago',
-    alerts: 1,
-  },
-];
+type UserSummary = {
+  id: string;
+  name: string;
+  email: string;
+  department: string;
+  role: string;
+  riskScore: number;
+  status: string;
+  lastActive: string;
+  alerts: number;
+  isInsiderThreat: boolean;
+};
 
 function RiskBadge({ score }: { score: number }) {
   let color = 'text-[var(--primary)]';
@@ -101,6 +47,34 @@ function StatusIcon({ status }: { status: string }) {
 }
 
 export default function UsersPage() {
+  const [users, setUsers] = useState<UserSummary[]>([]);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [showThreatsOnly, setShowThreatsOnly] = useState(false);
+
+  useEffect(() => {
+    let isMounted = true;
+    fetchJson<{ users: UserSummary[] }>('/api/users')
+      .then((data) => {
+        if (isMounted) setUsers(data.users);
+      })
+      .catch(() => undefined);
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const filteredUsers = useMemo(() => {
+    const query = searchTerm.toLowerCase();
+    return users.filter((user) => {
+      const matchSearch = !searchTerm
+        || `${user.name} ${user.email} ${user.department} ${user.role}`
+          .toLowerCase()
+          .includes(query);
+      const matchThreat = !showThreatsOnly || user.isInsiderThreat;
+      return matchSearch && matchThreat;
+    });
+  }, [users, searchTerm, showThreatsOnly]);
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -111,17 +85,12 @@ export default function UsersPage() {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <Link href="/users/peer-analysis" className="flex items-center gap-2 px-3 py-2 bg-[var(--surface-container)] border border-[var(--outline-variant)] rounded-lg text-sm text-[var(--on-surface)] hover:border-[var(--primary)] transition-colors">
-            <Shield className="w-4 h-4" />
-            Peer Analysis
-          </Link>
-          <Link href="/users/anomalous-sequences" className="flex items-center gap-2 px-3 py-2 bg-[var(--surface-container)] border border-[var(--outline-variant)] rounded-lg text-sm text-[var(--on-surface)] hover:border-[var(--primary)] transition-colors">
-            <AlertTriangle className="w-4 h-4" />
-            Anomalous Sequences
-          </Link>
-          <button className="flex items-center gap-2 px-3 py-2 bg-[var(--surface-container)] border border-[var(--outline-variant)] rounded-lg text-sm text-[var(--on-surface)] hover:border-[var(--primary)] transition-colors">
+          <button
+            className="flex items-center gap-2 px-3 py-2 bg-[var(--surface-container)] border border-[var(--outline-variant)] rounded-lg text-sm text-[var(--on-surface)] hover:border-[var(--primary)] transition-colors"
+            onClick={() => setShowThreatsOnly((current) => !current)}
+          >
             <Filter className="w-4 h-4" />
-            Filter
+            {showThreatsOnly ? 'Threats Only' : 'Filter'}
           </button>
         </div>
       </div>
@@ -133,26 +102,43 @@ export default function UsersPage() {
           type="text"
           placeholder="Search users by name, email, or department..."
           className="w-full pl-10 pr-4 py-2.5 bg-[var(--surface-container)] border border-[var(--outline-variant)] rounded-lg text-sm text-[var(--on-surface)] placeholder-[var(--on-surface-variant)] focus:outline-none focus:border-[var(--primary)] transition-colors"
+          value={searchTerm}
+          onChange={(event) => setSearchTerm(event.target.value)}
         />
       </div>
 
       {/* User cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-        {users.map((user) => (
-          <Link
+        {filteredUsers.map((user) => (
+          <div
             key={user.id}
-            href={`/users/${user.id}`}
-            className="bg-[var(--surface-container)] rounded-xl p-5 border border-[var(--outline-variant)] hover:border-[var(--primary)]/30 transition-colors group"
+            className={`relative rounded-xl p-5 border transition-colors ${
+              user.isInsiderThreat
+                ? 'bg-[var(--surface-container)]/80 border-[var(--secondary)]/40'
+                : 'bg-[var(--surface-container)] border-[var(--outline-variant)]'
+            }`}
           >
+            {user.isInsiderThreat && (
+              <div className="absolute left-0 top-0 bottom-0 w-1 bg-[var(--secondary)] rounded-l-xl" />
+            )}
             <div className="flex items-start justify-between">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-[var(--primary-container)]/20 flex items-center justify-center">
-                  <span className="text-sm font-semibold text-[var(--primary)]">
+                <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
+                  user.isInsiderThreat ? 'bg-[var(--secondary-container)]/30' : 'bg-[var(--primary-container)]/20'
+                }`}>
+                  <span className={`text-sm font-semibold ${
+                    user.isInsiderThreat ? 'text-[var(--secondary)]' : 'text-[var(--primary)]'
+                  }`}>
                     {user.name.split(' ').map((n) => n[0]).join('')}
                   </span>
                 </div>
                 <div>
-                  <p className="text-sm font-medium text-[var(--on-surface)]">{user.name}</p>
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-medium text-[var(--on-surface)]">{user.name}</p>
+                    {user.isInsiderThreat && (
+                      <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold bg-[var(--secondary)]/20 text-[var(--secondary)] border border-[var(--secondary)]/40">THREAT</span>
+                    )}
+                  </div>
                   <p className="text-xs font-mono text-[var(--on-surface-variant)]">{user.email}</p>
                 </div>
               </div>
@@ -183,10 +169,9 @@ export default function UsersPage() {
                 <span className="text-xs text-[var(--on-surface-variant)]">
                   {user.alerts} alert{user.alerts !== 1 ? 's' : ''}
                 </span>
-                <ChevronRight className="w-4 h-4 text-[var(--on-surface-variant)] group-hover:text-[var(--primary)] transition-colors" />
               </div>
             </div>
-          </Link>
+          </div>
         ))}
       </div>
     </div>

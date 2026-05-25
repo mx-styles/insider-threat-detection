@@ -1,76 +1,20 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Search, Filter, Download, Clock } from 'lucide-react';
+import { downloadText, fetchJson } from '@/lib/client-api';
 
-const logs = [
-  {
-    id: 'LOG-45892',
-    timestamp: '2026-05-19 17:28:45',
-    user: 'j.smith@company.com',
-    action: 's3:GetObject',
-    resource: 'arn:aws:s3:::confidential-data/report.pdf',
-    sourceIP: '192.168.1.45',
-    region: 'us-east-1',
-    status: 'success',
-    severity: 'warning',
-  },
-  {
-    id: 'LOG-45891',
-    timestamp: '2026-05-19 17:27:32',
-    user: 'm.johnson@company.com',
-    action: 'iam:AssumeRole',
-    resource: 'arn:aws:iam::123456789012:role/Admin',
-    sourceIP: '10.0.2.18',
-    region: 'us-west-2',
-    status: 'success',
-    severity: 'critical',
-  },
-  {
-    id: 'LOG-45890',
-    timestamp: '2026-05-19 17:25:18',
-    user: 'r.williams@company.com',
-    action: 'ec2:RunInstances',
-    resource: 'arn:aws:ec2:us-east-1:123456789012:instance/*',
-    sourceIP: '172.16.0.5',
-    region: 'us-east-1',
-    status: 'success',
-    severity: 'warning',
-  },
-  {
-    id: 'LOG-45889',
-    timestamp: '2026-05-19 17:23:05',
-    user: 'k.brown@company.com',
-    action: 'console:Login',
-    resource: 'AWS Management Console',
-    sourceIP: '203.0.113.42',
-    region: 'global',
-    status: 'success',
-    severity: 'safe',
-  },
-  {
-    id: 'LOG-45888',
-    timestamp: '2026-05-19 17:20:51',
-    user: 'a.davis@company.com',
-    action: 'dynamodb:Scan',
-    resource: 'arn:aws:dynamodb:us-east-1:123456789012:table/prod-users',
-    sourceIP: '10.0.1.23',
-    region: 'us-east-1',
-    status: 'success',
-    severity: 'critical',
-  },
-  {
-    id: 'LOG-45887',
-    timestamp: '2026-05-19 17:18:33',
-    user: 't.wilson@company.com',
-    action: 'ec2:AuthorizeSecurityGroupIngress',
-    resource: 'arn:aws:ec2:us-east-1:123456789012:security-group/sg-0abc123',
-    sourceIP: '10.0.3.8',
-    region: 'us-east-1',
-    status: 'success',
-    severity: 'warning',
-  },
-];
+type AuditLogItem = {
+  id: string;
+  timestamp: string;
+  userName: string;
+  action: string;
+  resource: string;
+  sourceIP: string;
+  region: string;
+  status: string;
+  severity: string;
+};
 
 function SeverityBadge({ severity }: { severity: string }) {
   const styles: any = {
@@ -87,6 +31,57 @@ function SeverityBadge({ severity }: { severity: string }) {
 }
 
 export default function AuditLogsPage() {
+  const [logs, setLogs] = useState<AuditLogItem[]>([]);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [showOnlyRisky, setShowOnlyRisky] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+
+  useEffect(() => {
+    let isMounted = true;
+    fetchJson<{ logs: AuditLogItem[] }>('/api/audit-logs')
+      .then((data) => {
+        if (isMounted) setLogs(data.logs);
+      })
+      .catch(() => undefined);
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    setPage(1);
+  }, [searchTerm, showOnlyRisky]);
+
+  const filteredLogs = useMemo(() => {
+    const query = searchTerm.toLowerCase();
+    return logs.filter((log) => {
+      const matchSearch = !searchTerm
+        || `${log.userName} ${log.action} ${log.resource} ${log.sourceIP} ${log.region}`
+          .toLowerCase()
+          .includes(query);
+      const matchRisk = !showOnlyRisky || log.severity !== 'safe';
+      return matchSearch && matchRisk;
+    });
+  }, [logs, searchTerm, showOnlyRisky]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredLogs.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const pageStart = (currentPage - 1) * pageSize;
+  const pageItems = filteredLogs.slice(pageStart, pageStart + pageSize);
+  const showingFrom = filteredLogs.length === 0 ? 0 : pageStart + 1;
+  const showingTo = Math.min(filteredLogs.length, pageStart + pageSize);
+
+  const handleExport = () => {
+    const headers = ['id', 'timestamp', 'userName', 'action', 'resource', 'sourceIP', 'region', 'status', 'severity'];
+    const escapeCsv = (value: string) => (/[",\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value);
+    const rows = filteredLogs.map((log) =>
+      headers.map((key) => escapeCsv(String((log as Record<string, string>)[key] ?? ''))).join(',')
+    );
+    const content = [headers.join(','), ...rows].join('\n');
+    downloadText('audit-logs.csv', content, 'text/csv');
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -97,11 +92,17 @@ export default function AuditLogsPage() {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <button className="flex items-center gap-2 px-3 py-2 bg-[var(--surface-container)] border border-[var(--outline-variant)] rounded-lg text-sm text-[var(--on-surface)] hover:border-[var(--primary)] transition-colors">
+          <button
+            className="flex items-center gap-2 px-3 py-2 bg-[var(--surface-container)] border border-[var(--outline-variant)] rounded-lg text-sm text-[var(--on-surface)] hover:border-[var(--primary)] transition-colors"
+            onClick={() => setShowOnlyRisky((current) => !current)}
+          >
             <Filter className="w-4 h-4" />
-            Filter
+            {showOnlyRisky ? 'Filter: Risky' : 'Filter'}
           </button>
-          <button className="flex items-center gap-2 px-3 py-2 bg-[var(--surface-container)] border border-[var(--outline-variant)] rounded-lg text-sm text-[var(--on-surface)] hover:border-[var(--primary)] transition-colors">
+          <button
+            className="flex items-center gap-2 px-3 py-2 bg-[var(--surface-container)] border border-[var(--outline-variant)] rounded-lg text-sm text-[var(--on-surface)] hover:border-[var(--primary)] transition-colors"
+            onClick={handleExport}
+          >
             <Download className="w-4 h-4" />
             Export
           </button>
@@ -115,6 +116,8 @@ export default function AuditLogsPage() {
           type="text"
           placeholder="Search logs by user, action, resource, or IP..."
           className="w-full pl-10 pr-4 py-2.5 bg-[var(--surface-container)] border border-[var(--outline-variant)] rounded-lg text-sm font-mono text-[var(--on-surface)] placeholder-[var(--on-surface-variant)] focus:outline-none focus:border-[var(--primary)] transition-colors"
+          value={searchTerm}
+          onChange={(event) => setSearchTerm(event.target.value)}
         />
       </div>
 
@@ -148,7 +151,7 @@ export default function AuditLogsPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-[var(--outline-variant)]">
-              {logs.map((log) => (
+              {pageItems.map((log) => (
                 <tr key={log.id} className="hover:bg-[var(--surface-container-high)]/50 transition-colors">
                   <td className="px-5 py-3">
                     <div className="flex items-center gap-1 text-xs font-mono text-[var(--on-surface-variant)]">
@@ -157,7 +160,7 @@ export default function AuditLogsPage() {
                     </div>
                   </td>
                   <td className="px-5 py-3">
-                    <span className="text-xs font-mono text-[var(--on-surface)]">{log.user}</span>
+                    <span className="text-xs font-mono text-[var(--on-surface)]">{log.userName}</span>
                   </td>
                   <td className="px-5 py-3">
                     <span className="text-xs font-mono text-[var(--primary)]">{log.action}</span>
@@ -180,6 +183,56 @@ export default function AuditLogsPage() {
               ))}
             </tbody>
           </table>
+        </div>
+        <div className="border-t border-[var(--outline-variant)] px-5 py-3 flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-[var(--on-surface-variant)]">
+              Showing {showingFrom}–{showingTo} of {filteredLogs.length} entries
+            </span>
+            <select
+              className="bg-[var(--surface-container)] border border-[var(--outline-variant)] rounded text-xs font-mono text-[var(--on-surface)] px-2 py-1"
+              value={pageSize}
+              onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}
+            >
+              <option value={25}>25 / page</option>
+              <option value={50}>50 / page</option>
+              <option value={100}>100 / page</option>
+            </select>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              className={`p-1 rounded text-[var(--on-surface-variant)] hover:bg-[var(--surface-variant)] ${currentPage === 1 ? 'opacity-40 cursor-not-allowed' : ''}`}
+              onClick={() => setPage(Math.max(1, currentPage - 1))}
+              disabled={currentPage === 1}
+            >
+              <span className="material-symbols-outlined text-sm">chevron_left</span>
+            </button>
+            {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+              const startPage = Math.max(1, Math.min(currentPage - 2, totalPages - 4));
+              const pageNum = startPage + i;
+              if (pageNum > totalPages) return null;
+              return (
+                <button
+                  key={pageNum}
+                  className={`w-7 h-7 rounded text-xs font-mono transition-colors ${
+                    pageNum === currentPage
+                      ? 'bg-[var(--primary)]/20 text-[var(--primary)] border border-[var(--primary)]/40'
+                      : 'text-[var(--on-surface-variant)] hover:bg-[var(--surface-variant)] border border-transparent'
+                  }`}
+                  onClick={() => setPage(pageNum)}
+                >
+                  {pageNum}
+                </button>
+              );
+            })}
+            <button
+              className={`p-1 rounded text-[var(--on-surface-variant)] hover:bg-[var(--surface-variant)] ${currentPage >= totalPages ? 'opacity-40 cursor-not-allowed' : ''}`}
+              onClick={() => setPage(Math.min(totalPages, currentPage + 1))}
+              disabled={currentPage >= totalPages}
+            >
+              <span className="material-symbols-outlined text-sm">chevron_right</span>
+            </button>
+          </div>
         </div>
       </div>
     </div>

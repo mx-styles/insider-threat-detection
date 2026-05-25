@@ -1,15 +1,51 @@
 'use client';
 
+import Link from 'next/link';
 import { useState } from 'react';
+import { useAuth } from '@/contexts/AuthContext';
+
+const DEFAULTS = {
+  riskThreshold: 85,
+  probCutoff: 0.75,
+  s3Weight: 4.5,
+  iamWeight: 3.8,
+  ec2Weight: 2.0,
+  lookback: '30',
+  recalcFreq: 'daily',
+};
 
 export default function SettingsPage() {
-  const [riskThreshold, setRiskThreshold] = useState(85);
-  const [probCutoff, setProbCutoff] = useState(0.75);
-  const [s3Weight, setS3Weight] = useState(4.5);
-  const [iamWeight, setIamWeight] = useState(3.8);
-  const [ec2Weight, setEc2Weight] = useState(2.0);
-  const [lookback, setLookback] = useState('30');
-  const [recalcFreq, setRecalcFreq] = useState('daily');
+  const [riskThreshold, setRiskThreshold] = useState(DEFAULTS.riskThreshold);
+  const [probCutoff, setProbCutoff] = useState(DEFAULTS.probCutoff);
+  const [s3Weight, setS3Weight] = useState(DEFAULTS.s3Weight);
+  const [iamWeight, setIamWeight] = useState(DEFAULTS.iamWeight);
+  const [ec2Weight, setEc2Weight] = useState(DEFAULTS.ec2Weight);
+  const [lookback, setLookback] = useState(DEFAULTS.lookback);
+  const { user } = useAuth();
+  const [recalcFreq, setRecalcFreq] = useState(DEFAULTS.recalcFreq);
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saved'>('idle');
+  const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'synced'>('idle');
+
+  const handleReset = () => {
+    setRiskThreshold(DEFAULTS.riskThreshold);
+    setProbCutoff(DEFAULTS.probCutoff);
+    setS3Weight(DEFAULTS.s3Weight);
+    setIamWeight(DEFAULTS.iamWeight);
+    setEc2Weight(DEFAULTS.ec2Weight);
+    setLookback(DEFAULTS.lookback);
+    setRecalcFreq(DEFAULTS.recalcFreq);
+    setSaveStatus('idle');
+  };
+
+  const handleSave = () => {
+    setSaveStatus('saved');
+  };
+
+  const handleSync = () => {
+    if (syncStatus === 'syncing') return;
+    setSyncStatus('syncing');
+    setTimeout(() => setSyncStatus('synced'), 800);
+  };
 
   return (
     <div className="flex flex-col gap-lg max-w-7xl mx-auto w-full">
@@ -180,6 +216,20 @@ export default function SettingsPage() {
 
         {/* Right Column: Settings & Integrations */}
         <div className="lg:col-span-4 flex flex-col gap-gutter">
+          {user?.isAdmin && (
+            <Link href="/settings/users" className="block bg-[var(--surface-container-lowest)] border border-[var(--surface-container)] rounded-lg p-lg hover:border-[var(--primary)]/40 transition-colors group">
+              <div className="flex items-center gap-sm mb-md border-b border-[var(--surface-container)] pb-sm">
+                <span className="material-symbols-outlined text-[var(--primary)]">admin_panel_settings</span>
+                <h2 className="font-headline-sm text-[var(--on-surface)]">User Management</h2>
+              </div>
+              <p className="text-sm text-[var(--on-surface-variant)]">Manage authentication users, roles, and access permissions</p>
+              <div className="mt-3 flex items-center gap-2 text-sm text-[var(--primary)] group-hover:gap-3 transition-all">
+                <span>Manage Users</span>
+                <span className="material-symbols-outlined text-sm">arrow_forward</span>
+              </div>
+            </Link>
+          )}
+
           {/* Behavioral Baselines */}
           <section className="bg-[var(--surface-container-lowest)] border border-[var(--surface-container)] rounded-lg p-lg">
             <div className="flex items-center gap-sm mb-md border-b border-[var(--surface-container)] pb-sm">
@@ -249,21 +299,35 @@ export default function SettingsPage() {
                 <span className="font-code-sm text-[var(--on-surface-variant)]">Lagging (2m)</span>
               </div>
             </div>
-            <button className="w-full bg-[var(--surface-container)] hover:bg-[var(--surface-container-high)] border border-[var(--surface-container-high)] text-[var(--on-surface)] font-body-md py-2 px-4 rounded transition-colors flex items-center justify-center gap-2">
+            <button
+              className="w-full bg-[var(--surface-container)] hover:bg-[var(--surface-container-high)] border border-[var(--surface-container-high)] text-[var(--on-surface)] font-body-md py-2 px-4 rounded transition-colors flex items-center justify-center gap-2"
+              onClick={handleSync}
+              disabled={syncStatus === 'syncing'}
+            >
               <span className="material-symbols-outlined text-sm">sync</span>
-              Sync Now
+              {syncStatus === 'syncing' ? 'Syncing...' : syncStatus === 'synced' ? 'Synced' : 'Sync Now'}
             </button>
           </section>
         </div>
       </div>
 
       {/* Action Buttons */}
-      <div className="flex justify-end gap-md mt-sm border-t border-[var(--surface-container-high)] pt-md">
-        <button className="bg-transparent border border-[var(--surface-container-high)] text-[var(--on-surface)] font-body-md py-2 px-6 rounded hover:bg-[var(--surface-container-low)] transition-colors">
+      <div className="flex justify-end gap-md mt-sm border-t border-[var(--surface-container-high)] pt-md items-center">
+        {saveStatus === 'saved' && (
+          <span className="text-xs text-[var(--on-surface-variant)]">Changes saved.</span>
+        )}
+        <button
+          className="bg-transparent border border-[var(--surface-container-high)] text-[var(--on-surface)] font-body-md py-2 px-6 rounded hover:bg-[var(--surface-container-low)] transition-colors"
+          onClick={handleReset}
+        >
           Reset to Defaults
         </button>
-        <button className="bg-[var(--primary)] text-black font-body-md font-semibold py-2 px-8 rounded hover:bg-[var(--primary-fixed)] transition-colors" style={{ boxShadow: '0 0 12px rgba(74,222,128,0.3)' }}>
-          Save Changes
+        <button
+          className="bg-[var(--primary)] text-black font-body-md font-semibold py-2 px-8 rounded hover:bg-[var(--primary-fixed)] transition-colors"
+          style={{ boxShadow: '0 0 12px rgba(74,222,128,0.3)' }}
+          onClick={handleSave}
+        >
+          {saveStatus === 'saved' ? 'Saved' : 'Save Changes'}
         </button>
       </div>
     </div>

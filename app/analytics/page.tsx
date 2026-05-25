@@ -1,60 +1,57 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { downloadJson, fetchJson } from '@/lib/client-api';
 
-const entities = [
-  {
-    name: 'J. Doe (DevOps)',
-    detail: 'IAM Role Assumption Spike',
-    score: 98,
-    severity: 'critical',
-    riskLabel: 'Data Exfiltration Risk',
-    riskLevel: 'High',
-    riskPercent: 95,
-  },
-  {
-    name: 'A. Smith (Finance)',
-    detail: 'Off-hours S3 Access',
-    score: 74,
-    severity: 'elevated',
-    riskLabel: 'Access Anomaly',
-    riskLevel: 'Medium',
-    riskPercent: 74,
-  },
-  {
-    name: 'Service_Acct_Prod',
-    detail: 'API Rate Limit Approaching',
-    score: 42,
-    severity: 'monitoring',
-    riskLabel: 'Volume Deviation',
-    riskLevel: 'Low',
-    riskPercent: 42,
-  },
-];
+type WatchlistItem = {
+  userId: string;
+  name: string;
+  detail: string;
+  score: number;
+  severity: string;
+  riskLabel: string;
+  riskLevel: string;
+  riskPercent: number;
+};
 
 const heatmapDays = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
 const heatmapHours = Array.from({ length: 24 }, (_, index) => index);
 
 const getRiskValue = (dayIndex: number, hour: number) => {
-  let riskValue = (((dayIndex * 13 + hour * 7) % 100) / 100) * 0.7;
+  const hash = ((dayIndex * 17 + hour * 31 + dayIndex * hour * 7 + 13) % 97) / 97;
+  let riskValue = hash * 0.3;
 
-  if (dayIndex < 5 && hour >= 9 && hour <= 17) {
-    riskValue += 0.2;
+  const isNight = hour >= 20 || hour <= 6;
+  const isLateNight = hour >= 0 && hour <= 4;
+  const isBusiness = dayIndex < 5 && hour >= 8 && hour <= 17;
+  const isWeekend = dayIndex >= 5;
+
+  if (isNight) {
+    riskValue += 0.25 + hash * 0.5;
   }
 
-  if (dayIndex === 3 && hour >= 12 && hour <= 15) {
-    riskValue += 0.35;
+  if (isLateNight) {
+    riskValue += 0.15 + hash * 0.2;
   }
 
-  if (dayIndex >= 5) {
+  if (isBusiness) {
     riskValue -= 0.2;
+    if (hash > 0.6) {
+      riskValue += 0.35 + (hash - 0.6) * 2.5;
+    }
+  }
+
+  if (isWeekend && isNight) {
+    riskValue += 0.05 + hash * 0.15;
   }
 
   return Math.max(0, Math.min(1, riskValue));
 };
 
 type HeatmapRisk = 'safe' | 'warning' | 'critical';
+
+type WatchlistTone = 'critical' | 'warning' | 'safe';
 
 type GraphNode = {
   id: string;
@@ -115,7 +112,48 @@ const getRiskStyles = (risk: HeatmapRisk) => {
   };
 };
 
+const getWatchlistTone = (score: number): WatchlistTone => {
+  if (score >= 75) return 'critical';
+  if (score >= 45) return 'warning';
+  return 'safe';
+};
+
+const watchlistToneStyles: Record<WatchlistTone, { card: string; badge: string; bar: string; text: string }> = {
+  critical: {
+    card: 'bg-[var(--surface-container-high)] border-[var(--error)]/50 glow-error hover:border-[var(--error)]',
+    badge: 'bg-[var(--error)]/20 border-[var(--error)] text-[var(--error)]',
+    bar: 'bg-[var(--error)]',
+    text: 'text-[var(--error)]',
+  },
+  warning: {
+    card: 'bg-[var(--surface-container)] border-[var(--tertiary)]/40 hover:border-[var(--tertiary)]',
+    badge: 'bg-[var(--tertiary)]/20 border-[var(--tertiary)] text-[var(--tertiary)]',
+    bar: 'bg-[var(--tertiary)]',
+    text: 'text-[var(--tertiary)]',
+  },
+  safe: {
+    card: 'bg-[var(--surface-container)] border-[var(--outline-variant)] hover:border-[var(--outline)]',
+    badge: 'bg-[var(--surface-variant)] border-[var(--outline)] text-[var(--on-surface-variant)]',
+    bar: 'bg-[var(--outline)]',
+    text: 'text-[var(--on-surface)]',
+  },
+};
+
 export default function AnalyticsPage() {
+  const [watchlist, setWatchlist] = useState<WatchlistItem[]>([]);
+  const [metrics, setMetrics] = useState({
+    globalRiskIndex: 0,
+    activeBaselines: 0,
+    anomalousSequences: 0,
+    entityCount: 0,
+  });
+  const [distribution, setDistribution] = useState({ critical: 0, warning: 0, safe: 0, total: 0 });
+  const [threatData, setThreatData] = useState<Array<{ time: string; threats: number; normal: number }>>([]);
+  const [users, setUsers] = useState<Array<{
+    id: string; name: string; department: string; role: string;
+    riskScore: number; status: string; isInsiderThreat: boolean;
+  }>>([]);
+  const [graphScale, setGraphScale] = useState(1);
   const graphContainerRef = useRef<HTMLDivElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const nodesGroupRef = useRef<SVGGElement | null>(null);
@@ -127,7 +165,62 @@ export default function AnalyticsPage() {
   const edgesRef = useRef<GraphEdge[]>([]);
   const animationRef = useRef<number | null>(null);
 
+  const avgUserRisk = users.length
+    ? Math.round(users.reduce((sum, u) => sum + u.riskScore, 0) / users.length)
+    : 0;
+
+  const computedGlobalRisk = users.length && distribution.total
+    ? Math.min(100, Math.round(
+        (users.reduce((sum, u) => sum + u.riskScore, 0) / users.length) *
+        (1 + (distribution.critical / distribution.total) * 3)
+      ))
+    : 0;
+
   useEffect(() => {
+    let isMounted = true;
+    Promise.all([
+      fetchJson<{
+        analytics: {
+          watchlist: WatchlistItem[];
+          globalRiskIndex: number;
+          activeBaselines: number;
+          anomalousSequences: number;
+          entityCount: number;
+          distribution: { critical: number; warning: number; safe: number; total: number };
+          threatData: Array<{ time: string; threats: number; normal: number }>;
+        };
+      }>('/api/analytics'),
+      fetchJson<{ users: typeof users }>('/api/users'),
+    ])
+      .then(([analyticsData, usersData]) => {
+        if (isMounted) {
+          setWatchlist(analyticsData.analytics.watchlist);
+          setMetrics({
+            globalRiskIndex: analyticsData.analytics.globalRiskIndex,
+            activeBaselines: analyticsData.analytics.activeBaselines,
+            anomalousSequences: analyticsData.analytics.anomalousSequences,
+            entityCount: analyticsData.analytics.entityCount,
+          });
+          setDistribution(analyticsData.analytics.distribution);
+          setThreatData(analyticsData.analytics.threatData);
+          setUsers(usersData.users);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const getWatchlistHref = (index: number) => {
+    const userId = watchlist[index]?.userId;
+    if (!userId) return '/users';
+    return `/users/anomalous-sequences?id=${userId}`;
+  };
+
+  useEffect(() => {
+    if (users.length === 0) return undefined;
+
     const svg = svgRef.current;
     const nodesGroup = nodesGroupRef.current;
     const edgesGroup = edgesGroupRef.current;
@@ -143,33 +236,49 @@ export default function AnalyticsPage() {
     const SVG_NS = 'http://www.w3.org/2000/svg';
     const width = 800;
     const height = 400;
-    const nodeCount = 22;
     const nodes: GraphNode[] = [];
     const edges: GraphEdge[] = [];
 
-    for (let index = 0; index < nodeCount; index += 1) {
-      const isCompromised = index < 6;
+    const getNodeColor = (user: typeof users[number]) => {
+      if (user.isInsiderThreat || user.riskScore >= 75) return 'var(--secondary)';
+      if (user.riskScore >= 45) return 'var(--tertiary)';
+      return 'var(--primary)';
+    };
+
+    const getNodeRadius = (user: typeof users[number]) => {
+      if (user.isInsiderThreat || user.riskScore >= 75) return 7;
+      if (user.riskScore >= 45) return 5;
+      return 4;
+    };
+
+    users.forEach((user, index) => {
+      const isCompromised = user.isInsiderThreat || user.riskScore >= 75;
       nodes.push({
-        id: index < 12 ? `usr-${100 + index}` : `ip-172.16.0.${index}`,
+        id: user.name,
         x: Math.random() * (width - 100) + 50,
         y: Math.random() * (height - 100) + 50,
         vx: (Math.random() - 0.5) * 0.2,
         vy: (Math.random() - 0.5) * 0.2,
         isCompromised,
-        color: isCompromised ? 'var(--secondary)' : 'var(--primary)',
+        color: getNodeColor(user),
         scale: 1,
       });
-    }
+    });
 
-    for (let index = 0; index < nodes.length; index += 1) {
-      const connectionCount = Math.floor(Math.random() * 2) + 1;
-      for (let connection = 0; connection < connectionCount; connection += 1) {
-        const target = Math.floor(Math.random() * nodes.length);
-        if (target !== index) {
-          edges.push({ source: index, target });
+    const deptGroups = new Map<string, number[]>();
+    users.forEach((user, index) => {
+      const group = deptGroups.get(user.department) || [];
+      group.push(index);
+      deptGroups.set(user.department, group);
+    });
+
+    deptGroups.forEach((indices) => {
+      for (let i = 0; i < indices.length; i++) {
+        for (let j = i + 1; j < indices.length; j++) {
+          edges.push({ source: indices[i], target: indices[j] });
         }
       }
-    }
+    });
 
     nodesRef.current = nodes;
     edgesRef.current = edges;
@@ -189,25 +298,34 @@ export default function AnalyticsPage() {
       });
 
       nodes.forEach((node, nodeIndex) => {
+        const user = users[nodeIndex];
         const group = document.createElementNS(SVG_NS, 'g');
         group.setAttribute('class', 'graph-node');
         group.setAttribute('id', `node-group-${nodeIndex}`);
 
         const circle = document.createElementNS(SVG_NS, 'circle');
-        circle.setAttribute('r', node.isCompromised ? '6' : '4');
+        circle.setAttribute('r', String(getNodeRadius(user)));
         circle.setAttribute('fill', node.color);
         circle.setAttribute('filter', node.isCompromised ? 'url(#node-glow)' : '');
 
         group.appendChild(circle);
 
+        const label = document.createElementNS(SVG_NS, 'text');
+        label.setAttribute('dy', String(getNodeRadius(user) + 12));
+        label.setAttribute('text-anchor', 'middle');
+        label.setAttribute('fill', 'var(--on-surface-variant)');
+        label.setAttribute('font-size', '7');
+        label.setAttribute('font-family', 'var(--font-code)');
+        label.textContent = user.name;
+        group.appendChild(label);
+
         group.addEventListener('mouseenter', () => {
           node.scale = 1.6;
-          nodeIdEl.innerText = node.id;
-          nodeStatusEl.innerText = node.isCompromised ? 'Status: ANOMALOUS' : 'Status: Verified';
-          nodeStatusEl.className = `font-code-sm ${node.isCompromised ? 'text-[var(--secondary)]' : 'text-[var(--primary)]'}`;
+          nodeIdEl.innerText = `${user.name}  ·  ${user.department}`;
+          nodeStatusEl.innerText = `Score: ${user.riskScore}  ·  ${user.isInsiderThreat ? 'INSIDER THREAT' : user.riskScore >= 75 ? 'HIGH RISK' : user.riskScore >= 45 ? 'MEDIUM RISK' : 'LOW RISK'}`;
+          nodeStatusEl.className = `font-code-sm ${node.isCompromised ? 'text-[var(--secondary)]' : 'text-[var(--on-surface-variant)]'}`;
 
           const rect = svg.getBoundingClientRect();
-          const containerRect = container.getBoundingClientRect();
           tooltip.style.left = `${(node.x / width) * rect.width + 15}px`;
           tooltip.style.top = `${(node.y / height) * rect.height - 40}px`;
           tooltip.classList.remove('hidden');
@@ -270,14 +388,29 @@ export default function AnalyticsPage() {
         cancelAnimationFrame(animationRef.current);
       }
     };
-  }, []);
+  }, [users.length]);
 
   const handleGraphReset = () => {
     nodesRef.current.forEach((node) => {
       node.vx = (Math.random() - 0.5) * 0.4;
       node.vy = (Math.random() - 0.5) * 0.4;
     });
+    setGraphScale(1);
   };
+
+  const handleZoomIn = () => {
+    setGraphScale((current) => Math.min(1.6, Number((current + 0.1).toFixed(2))));
+  };
+
+  const handleZoomOut = () => {
+    setGraphScale((current) => Math.max(0.7, Number((current - 0.1).toFixed(2))));
+  };
+
+  const handleExportReport = () => {
+    downloadJson('analytics-report.json', { metrics, watchlist });
+  };
+
+  const visibleWatchlist = watchlist.slice(0, 3);
 
   return (
     <div className="flex flex-col gap-gutter">
@@ -290,12 +423,18 @@ export default function AnalyticsPage() {
           </p>
         </div>
         <div className="flex gap-sm">
-          <button className="px-4 py-2 rounded border border-[var(--outline-variant)] text-[var(--on-surface)] font-body-md text-body-md hover:bg-[var(--surface-variant)] transition-colors flex items-center gap-2">
+          <button
+            className="px-4 py-2 rounded border border-[var(--outline-variant)] text-[var(--on-surface)] font-body-md text-body-md hover:bg-[var(--surface-variant)] transition-colors flex items-center gap-2"
+            onClick={handleExportReport}
+          >
             <span className="material-symbols-outlined text-sm">download</span> Export Report
           </button>
-          <button className="px-4 py-2 rounded bg-[var(--primary-container)] text-[var(--on-primary-container)] font-body-md text-body-md hover:brightness-110 transition-all flex items-center gap-2">
+          <Link
+            href="/settings"
+            className="px-4 py-2 rounded bg-[var(--primary-container)] text-[var(--on-primary-container)] font-body-md text-body-md hover:brightness-110 transition-all flex items-center gap-2"
+          >
             <span className="material-symbols-outlined text-sm">tune</span> Tune Baselines
-          </button>
+          </Link>
         </div>
       </div>
 
@@ -309,29 +448,42 @@ export default function AnalyticsPage() {
             <span className="material-symbols-outlined text-[var(--error)] animate-breathe">trending_up</span>
           </div>
           <div className="flex items-baseline gap-2">
-            <span className="font-display-lg text-display-lg text-[var(--on-surface)] animate-breathe inline-block">84.2</span>
-            <span className="font-code-md text-code-md text-[var(--error)]">+4.1%</span>
+            <span className="font-display-lg text-display-lg text-[var(--on-surface)] animate-breathe inline-block">{computedGlobalRisk}</span>
+            <span className="font-code-md text-code-md text-[var(--error)]">+{Math.round((computedGlobalRisk / Math.max(avgUserRisk, 1) - 1) * 100)}% vs avg user</span>
           </div>
           <div className="mt-4 h-1 w-full bg-[var(--surface-variant)] rounded-full overflow-hidden">
-            <div className="h-full bg-[var(--error)] w-[84%] glow-error" />
+            <div className="h-full bg-[var(--error)] glow-error" style={{ width: `${computedGlobalRisk}%` }} />
           </div>
         </div>
 
-        {/* Metric Card 2: Active Baselines */}
+        {/* Metric Card 2: Entity Distribution */}
         <div className="bg-[var(--surface-container)] border border-[var(--outline-variant)] rounded-lg p-md relative overflow-hidden group fade-in-up delay-200">
           <div className="absolute top-0 right-0 w-24 h-24 bg-[var(--primary)] opacity-10 rounded-bl-full transform -translate-y-8 group-hover:scale-110 transition-transform" />
           <div className="flex justify-between items-start mb-4">
-            <h3 className="font-label-caps text-label-caps text-[var(--on-surface-variant)]">Active Baselines</h3>
+            <h3 className="font-label-caps text-label-caps text-[var(--on-surface-variant)]">Entity Risk Distribution</h3>
             <span className="material-symbols-outlined text-[var(--primary)]">model_training</span>
           </div>
           <div className="flex items-baseline gap-2">
-            <span className="font-display-lg text-display-lg text-[var(--on-surface)]">1,492</span>
+            <span className="font-display-lg text-display-lg text-[var(--on-surface)]">{metrics.entityCount}</span>
             <span className="font-body-md text-body-md text-[var(--on-surface-variant)]">entities tracked</span>
           </div>
-          <p className="font-code-sm text-code-sm text-[var(--primary)] mt-4 flex items-center gap-1">
-            <span className="w-1.5 h-1.5 rounded-full bg-[var(--primary)] glow-primary inline-block" />
-            Models converged
-          </p>
+          <div className="mt-4 flex items-center gap-3 font-code-sm text-code-sm">
+            <span className="flex items-center gap-1">
+              <span className="w-2 h-2 rounded-full bg-[var(--secondary)]" />
+              <span className="text-[var(--secondary)]">{distribution.critical}</span>
+              <span className="text-[var(--on-surface-variant)]">critical</span>
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="w-2 h-2 rounded-full bg-[var(--tertiary)]" />
+              <span className="text-[var(--tertiary)]">{distribution.warning}</span>
+              <span className="text-[var(--on-surface-variant)]">warning</span>
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="w-2 h-2 rounded-full bg-[var(--primary)]" />
+              <span className="text-[var(--primary)]">{distribution.safe}</span>
+              <span className="text-[var(--on-surface-variant)]">safe</span>
+            </span>
+          </div>
         </div>
 
         {/* Metric Card 3: Anomalous Sequences */}
@@ -342,16 +494,32 @@ export default function AnalyticsPage() {
             <span className="material-symbols-outlined text-[var(--tertiary)]">pattern</span>
           </div>
           <div className="flex items-baseline gap-2">
-            <span className="font-display-lg text-display-lg text-[var(--on-surface)]">38</span>
+            <span className="font-display-lg text-display-lg text-[var(--on-surface)]">{metrics.anomalousSequences}</span>
             <span className="font-code-md text-code-md text-[var(--tertiary)]">last 24h</span>
           </div>
           <div className="mt-4 flex gap-1 h-6 items-end">
-            <div className="w-1/6 bg-[var(--surface-container-highest)] border border-[var(--outline-variant)]/60 rounded-t h-[20%] hover:bg-[var(--tertiary)]/40 transition-colors" />
-            <div className="w-1/6 bg-[var(--surface-container-highest)] border border-[var(--outline-variant)]/60 rounded-t h-[40%] hover:bg-[var(--tertiary)]/40 transition-colors" />
-            <div className="w-1/6 bg-[var(--surface-container-highest)] border border-[var(--outline-variant)]/60 rounded-t h-[30%] hover:bg-[var(--tertiary)]/40 transition-colors" />
-            <div className="w-1/6 bg-[var(--surface-container-highest)] border border-[var(--outline-variant)]/60 rounded-t h-[80%] hover:bg-[var(--tertiary)]/40 transition-colors" />
-            <div className="w-1/6 bg-[var(--surface-container-highest)] border border-[var(--outline-variant)]/60 rounded-t h-[50%] hover:bg-[var(--tertiary)]/40 transition-colors" />
-            <div className="w-1/6 bg-[var(--tertiary)] rounded-t h-[100%]" style={{ boxShadow: '0 0 8px rgba(255,218,178,0.4)' }} />
+            {threatData.length > 0 ? (
+              threatData.map((point, index) => {
+                const maxThreat = Math.max(...threatData.map((p) => p.threats), 1);
+                const heightPct = (point.threats / maxThreat) * 100;
+                const isPeak = point.threats === maxThreat;
+                return (
+                  <div
+                    key={point.time}
+                    className={`flex-1 rounded-t transition-all duration-300 hover:brightness-125 ${isPeak ? 'bg-[var(--tertiary)]' : 'bg-[var(--surface-container-highest)] border border-[var(--outline-variant)]/60'}`}
+                    style={{
+                      height: `${Math.max(heightPct, 5)}%`,
+                      boxShadow: isPeak ? '0 0 8px rgba(255,218,178,0.4)' : undefined,
+                    }}
+                    title={`${point.time}: ${point.threats} threats`}
+                  />
+                );
+              })
+            ) : (
+              <div className="w-full h-full flex items-center justify-center text-[var(--on-surface-variant)] font-code-sm">
+                No data
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -362,87 +530,43 @@ export default function AnalyticsPage() {
         <div className="xl:col-span-1 flex flex-col gap-gutter">
           <div className="flex items-center justify-between mb-2">
             <h2 className="font-headline-md text-headline-md text-[var(--on-surface)]">Entity Watchlist</h2>
-            <Link href="/users/peer-analysis" className="text-[var(--primary)] font-code-sm text-code-sm hover:underline">View All</Link>
           </div>
 
-          <Link href="/users/anomalous-sequences" className="block">
-            <div className="bg-[var(--surface-container-high)] border border-[var(--error)]/50 rounded-lg p-md relative glow-error group cursor-pointer hover:border-[var(--error)] transition-all duration-300 hover:scale-[1.02] hover:brightness-110">
-              <div className="flex justify-between items-start mb-3">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded bg-[var(--surface-container)] flex items-center justify-center border border-[var(--outline-variant)]">
-                    <span className="material-symbols-outlined text-[var(--on-surface-variant)]">person</span>
-                  </div>
-                  <div>
-                    <h4 className="font-headline-sm text-headline-sm text-[var(--on-surface)]">{entities[0].name}</h4>
-                    <p className="font-code-sm text-code-sm text-[var(--on-surface-variant)]">{entities[0].detail}</p>
-                  </div>
-                </div>
-                <div className="bg-[var(--error)]/20 border border-[var(--error)] text-[var(--error)] px-2 py-1 rounded font-code-md text-code-md">
-                  {entities[0].score}
-                </div>
-              </div>
-              <div className="space-y-2 mt-4">
-                <div className="flex justify-between font-code-sm text-code-sm">
-                  <span className="text-[var(--on-surface-variant)]">{entities[0].riskLabel}</span>
-                  <span className="text-[var(--error)]">{entities[0].riskLevel}</span>
-                </div>
-                <div className="w-full bg-[var(--surface-variant)] h-1.5 rounded-full overflow-hidden">
-                  <div className="h-full bg-[var(--error)] rounded-full" style={{ width: `${entities[0].riskPercent}%` }} />
-                </div>
-              </div>
-            </div>
-          </Link>
+          <div className="flex flex-col gap-md">
+            {visibleWatchlist.map((item, index) => {
+              const tone = getWatchlistTone(item.score);
+              const styles = watchlistToneStyles[tone];
 
-          <div className="bg-[var(--surface-container)] border border-[var(--outline-variant)] rounded-lg p-md group cursor-pointer hover:border-[var(--tertiary)] transition-all duration-300 hover:scale-[1.02] hover:brightness-110">
-            <div className="flex justify-between items-start mb-3">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded bg-[var(--surface-container)] flex items-center justify-center border border-[var(--outline-variant)]">
-                  <span className="material-symbols-outlined text-[var(--on-surface-variant)]">person</span>
-                </div>
-                <div>
-                  <h4 className="font-headline-sm text-headline-sm text-[var(--on-surface)]">{entities[1].name}</h4>
-                  <p className="font-code-sm text-code-sm text-[var(--on-surface-variant)]">{entities[1].detail}</p>
-                </div>
-              </div>
-              <div className="bg-[var(--tertiary)]/20 border border-[var(--tertiary)] text-[var(--tertiary)] px-2 py-1 rounded font-code-md text-code-md">
-                {entities[1].score}
-              </div>
-            </div>
-            <div className="space-y-2 mt-4">
-              <div className="flex justify-between font-code-sm text-code-sm">
-                <span className="text-[var(--on-surface-variant)]">{entities[1].riskLabel}</span>
-                <span className="text-[var(--tertiary)]">{entities[1].riskLevel}</span>
-              </div>
-              <div className="w-full bg-[var(--surface-variant)] h-1.5 rounded-full overflow-hidden">
-                <div className="h-full bg-[var(--tertiary)] rounded-full" style={{ width: `${entities[1].riskPercent}%` }} />
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-[var(--surface-container)] border border-[var(--outline-variant)] rounded-lg p-md group cursor-pointer hover:border-[var(--outline)] transition-all duration-300 hover:scale-[1.02] hover:brightness-110">
-            <div className="flex justify-between items-start mb-3">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded bg-[var(--surface-container)] flex items-center justify-center border border-[var(--outline-variant)]">
-                  <span className="material-symbols-outlined text-[var(--on-surface-variant)]">person</span>
-                </div>
-                <div>
-                  <h4 className="font-headline-sm text-headline-sm text-[var(--on-surface)]">{entities[2].name}</h4>
-                  <p className="font-code-sm text-code-sm text-[var(--on-surface-variant)]">{entities[2].detail}</p>
-                </div>
-              </div>
-              <div className="bg-[var(--surface-variant)] border border-[var(--outline)] text-[var(--on-surface-variant)] px-2 py-1 rounded font-code-md text-code-md">
-                {entities[2].score}
-              </div>
-            </div>
-            <div className="space-y-2 mt-4">
-              <div className="flex justify-between font-code-sm text-code-sm">
-                <span className="text-[var(--on-surface-variant)]">{entities[2].riskLabel}</span>
-                <span className="text-[var(--on-surface)]">{entities[2].riskLevel}</span>
-              </div>
-              <div className="w-full bg-[var(--surface-variant)] h-1.5 rounded-full overflow-hidden">
-                <div className="h-full bg-[var(--outline)] rounded-full" style={{ width: `${entities[2].riskPercent}%` }} />
-              </div>
-            </div>
+              return (
+                <Link key={item.userId} href={getWatchlistHref(index)} className="block">
+                  <div className={`border rounded-lg p-md relative group cursor-pointer transition-all duration-300 hover:scale-[1.02] hover:brightness-110 ${styles.card}`}>
+                    <div className="flex justify-between items-start mb-3">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded bg-[var(--surface-container)] flex items-center justify-center border border-[var(--outline-variant)]">
+                          <span className="material-symbols-outlined text-[var(--on-surface-variant)]">person</span>
+                        </div>
+                        <div>
+                          <h4 className="font-headline-sm text-headline-sm text-[var(--on-surface)]">{item.name}</h4>
+                          <p className="font-code-sm text-code-sm text-[var(--on-surface-variant)]">{item.detail}</p>
+                        </div>
+                      </div>
+                      <div className={`border px-2 py-1 rounded font-code-md text-code-md ${styles.badge}`}>
+                        {item.score}
+                      </div>
+                    </div>
+                    <div className="space-y-2 mt-4">
+                      <div className="flex justify-between font-code-sm text-code-sm">
+                        <span className="text-[var(--on-surface-variant)]">{item.riskLabel}</span>
+                        <span className={styles.text}>{item.riskLevel}</span>
+                      </div>
+                      <div className="w-full bg-[var(--surface-variant)] h-1.5 rounded-full overflow-hidden">
+                        <div className={`h-full rounded-full ${styles.bar}`} style={{ width: `${item.riskPercent}%` }} />
+                      </div>
+                    </div>
+                  </div>
+                </Link>
+              );
+            })}
           </div>
         </div>
 
@@ -534,8 +658,16 @@ export default function AnalyticsPage() {
                 <button
                   className="p-1.5 rounded border border-[var(--outline-variant)] hover:bg-[var(--surface-variant)] text-[var(--on-surface-variant)]"
                   title="Zoom In"
+                  onClick={handleZoomIn}
                 >
                   <span className="material-symbols-outlined text-sm">zoom_in</span>
+                </button>
+                <button
+                  className="p-1.5 rounded border border-[var(--outline-variant)] hover:bg-[var(--surface-variant)] text-[var(--on-surface-variant)]"
+                  title="Zoom Out"
+                  onClick={handleZoomOut}
+                >
+                  <span className="material-symbols-outlined text-sm">zoom_out</span>
                 </button>
                 <button
                   className="p-1.5 rounded border border-[var(--outline-variant)] hover:bg-[var(--surface-variant)] text-[var(--on-surface-variant)]"
@@ -559,7 +691,12 @@ export default function AnalyticsPage() {
                   opacity: 0.1,
                 }}
               />
-              <svg ref={svgRef} className="w-full h-full" viewBox="0 0 800 400">
+              <svg
+                ref={svgRef}
+                className="w-full h-full"
+                viewBox="0 0 800 400"
+                style={{ transform: `scale(${graphScale})`, transformOrigin: 'center' }}
+              >
                 <defs>
                   <filter id="node-glow">
                     <feGaussianBlur result="blur" stdDeviation="2" />
@@ -574,20 +711,24 @@ export default function AnalyticsPage() {
                 className="absolute z-30 bg-[var(--surface-container-highest)]/90 backdrop-blur border border-[var(--outline-variant)] rounded p-2 text-xs shadow-xl pointer-events-none hidden transition-opacity duration-200"
               >
                 <p ref={nodeIdRef} className="font-bold text-[var(--on-surface)] mb-0.5">
-                  usr-unknown
+                  user · Department
                 </p>
                 <p ref={nodeStatusRef} className="font-code-sm text-[var(--on-surface-variant)]">
-                  Status: Normal
+                  Score: 0 · Status
                 </p>
               </div>
               <div className="absolute top-4 left-4 bg-[var(--surface)]/80 backdrop-blur border border-[var(--outline-variant)] rounded p-3 text-xs z-10">
                 <div className="flex items-center gap-2 mb-1">
                   <span className="w-2 h-2 rounded-full bg-[var(--secondary)] shadow-[0_0_8px_rgba(255,179,176,0.6)]" />
-                  <span className="font-code-sm text-[var(--on-surface)]">Compromised Cluster</span>
+                  <span className="font-code-sm text-[var(--on-surface)]">High Risk / Insider Threat</span>
+                </div>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="w-2 h-2 rounded-full bg-[var(--tertiary)] shadow-[0_0_6px_rgba(255,218,178,0.5)]" />
+                  <span className="font-code-sm text-[var(--on-surface)]">Medium Risk</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="w-2 h-2 rounded-full bg-[var(--primary)] shadow-[0_0_8px_rgba(77,224,130,0.4)]" />
-                  <span className="font-code-sm text-[var(--on-surface)]">Verified Baseline</span>
+                  <span className="font-code-sm text-[var(--on-surface)]">Low Risk</span>
                 </div>
               </div>
             </div>

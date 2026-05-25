@@ -2,83 +2,45 @@
 
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { Suspense } from 'react';
+import { Suspense, useEffect, useState } from 'react';
+import { fetchJson } from '@/lib/client-api';
 
-const investigations: any = {
-  'A-102': {
-    id: 'A-102',
-    severity: 'critical',
-    riskScore: '0.92',
-    entity: 'user_12',
-    department: 'Data Engineering',
-    firstSeen: 'Oct 24, 01:45 AM',
-    location: 'Seattle, US (VPN)',
-    explanation: 'User accessed sensitive resource after privilege escalation during abnormal hours.',
-    tags: ['AFTER HOURS', 'PRIVILEGE ESCALATION', 'SENSITIVE ACCESS'],
-    features: [
-      { name: 'Resource Sensitivity', value: 92, severity: 'error' },
-      { name: 'Time of Day Anomaly', value: 85, severity: 'error' },
-      { name: 'Role Deviation', value: 64, severity: 'tertiary' },
-    ],
-    events: [
-      {
-        time: '01:45 AM',
-        type: 'NORMAL',
-        title: 'Initial Authentication',
-        detail: 'Console login via SSO',
-        icon: 'login',
-        anomaly: false,
-      },
-      {
-        time: '02:05 AM',
-        delta: 'T +20m',
-        type: 'ANOMALY',
-        title: 'Role Assumption Deviation',
-        detail: (
-          <>
-            <span className="text-[var(--on-surface-variant)]">Assumed Role: </span>
-            <span className="text-[var(--on-surface)]">arn:aws:iam::123456789012:role/FinanceDataAdmin</span>
-          </>
-        ),
-        icon: 'admin_panel_settings',
-        anomaly: true,
-      },
-      {
-        time: '02:13 AM',
-        delta: 'T +28m',
-        type: 'ANOMALY',
-        title: 'Sensitive Bucket Access',
-        detail: (
-          <>
-            <span className="text-[var(--on-surface-variant)]">Action: </span>
-            <span className="text-[var(--on-surface)]">s3:ListBucket</span>
-            <br />
-            <span className="text-[var(--on-surface-variant)]">Resource: </span>
-            <span className="text-[var(--on-surface)]">s3://finance_bucket</span>
-          </>
-        ),
-        icon: 'folder_open',
-        anomaly: true,
-      },
-      {
-        time: '02:15 AM',
-        delta: 'T +30m',
-        type: 'ANOMALY',
-        title: 'High Volume Exfiltration Suspicion',
-        detail: (
-          <>
-            <span className="text-[var(--on-surface-variant)]">Action: </span>
-            <span className="text-[var(--on-surface)]">s3:GetObject (Bulk)</span>
-            <br />
-            <span className="text-[var(--on-surface-variant)]">Volume: </span>
-            <span className="text-[var(--error)] font-bold">4.2 GB</span>
-          </>
-        ),
-        icon: 'download',
-        anomaly: true,
-      },
-    ],
-  },
+type InvestigationDetail = {
+  id: string;
+  severity: string;
+  riskScore: number;
+  entity: string;
+  department: string;
+  firstSeen: string;
+  location: string;
+  explanation: string;
+  tags: string[];
+  features: Array<{ name: string; value: number; severity: string }>;
+  events: Array<{
+    time: string;
+    delta?: string;
+    type: string;
+    title: string;
+    detailLines?: string[];
+    icon: string;
+    anomaly: boolean;
+  }>;
+  graph: {
+    nodes: Array<{
+      id: string;
+      label: string;
+      kind: 'entity' | 'workstation' | 'resource' | 'account' | 'external';
+      x: number;
+      y: number;
+      status: 'normal' | 'anomalous' | 'suspicious';
+    }>;
+    edges: Array<{
+      source: string;
+      target: string;
+      dashed?: boolean;
+      anomalous?: boolean;
+    }>;
+  };
 };
 
 function SeverityBadge({ severity }: { severity: string }) {
@@ -114,8 +76,64 @@ function SeverityBadge({ severity }: { severity: string }) {
 
 function InvestigationContent() {
   const searchParams = useSearchParams();
-  const alertId = searchParams.get('id') || 'A-102';
-  const inv = investigations[alertId] || investigations['A-102'];
+  const alertId = searchParams.get('id') ?? '';
+  const [inv, setInv] = useState<InvestigationDetail | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const [graphScale, setGraphScale] = useState(1);
+
+  useEffect(() => {
+    let isMounted = true;
+    setIsLoading(true);
+    fetchJson<{ investigation: InvestigationDetail }>(`/api/investigation?id=${alertId}`)
+      .then((data) => {
+        if (isMounted) {
+          setInv(data.investigation);
+          setIsLoading(false);
+        }
+      })
+      .catch(() => {
+        if (isMounted) {
+          setInv(null);
+          setIsLoading(false);
+        }
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, [alertId]);
+
+  if (isLoading) {
+    return <div className="flex items-center justify-center h-64 text-[var(--on-surface-variant)]">Loading investigation...</div>;
+  }
+
+  if (!inv) {
+    return <div className="flex items-center justify-center h-64 text-[var(--on-surface-variant)]">Investigation not found.</div>;
+  }
+
+  const handleAcknowledge = () => {
+    setActionNotice(`Investigation ${inv.id} acknowledged.`);
+  };
+
+  const handleCreateCase = () => {
+    setActionNotice(`Case created for ${inv.id}.`);
+  };
+
+  const handleZoomIn = () => {
+    setGraphScale((current) => Math.min(1.4, Number((current + 0.1).toFixed(2))));
+  };
+
+  const handleZoomOut = () => {
+    setGraphScale((current) => Math.max(0.8, Number((current - 0.1).toFixed(2))));
+  };
+
+  const nodeStyleByKind: Record<InvestigationDetail['graph']['nodes'][number]['kind'], { shape: string; border: string; fill: string; icon: string }> = {
+    entity: { shape: 'rounded-full', border: 'border-[var(--primary)]', fill: 'bg-[var(--surface-container)]', icon: 'person' },
+    workstation: { shape: 'rounded', border: 'border-[var(--outline-variant)]', fill: 'bg-[var(--surface-container)]', icon: 'laptop_mac' },
+    resource: { shape: 'rounded-lg', border: 'border-[var(--tertiary)]', fill: 'bg-[var(--surface-container)]', icon: 'folder_special' },
+    account: { shape: 'rounded-md', border: 'border-[var(--secondary)]', fill: 'bg-[var(--surface-container)]', icon: 'admin_panel_settings' },
+    external: { shape: 'rounded-full', border: 'border-[var(--error)]', fill: 'bg-[var(--error-container)]/10', icon: 'travel_explore' },
+  };
 
   return (
     <div className="flex flex-col gap-gutter">
@@ -135,13 +153,24 @@ function InvestigationContent() {
             <SeverityBadge severity={inv.severity} />
           </h1>
         </div>
-        <div className="flex gap-sm">
-          <button className="bg-[var(--surface-container)] border border-[var(--outline-variant)] hover:border-[var(--outline)] text-[var(--on-surface)] px-md py-sm rounded font-body-md text-body-md transition-colors">
+        <div className="flex flex-col items-start gap-xs">
+          <div className="flex gap-sm">
+            <button
+              className="bg-[var(--surface-container)] border border-[var(--outline-variant)] hover:border-[var(--outline)] text-[var(--on-surface)] px-md py-sm rounded font-body-md text-body-md transition-colors"
+              onClick={handleAcknowledge}
+            >
             Acknowledge
-          </button>
-          <button className="bg-[var(--primary)] text-[var(--on-primary)] px-md py-sm rounded font-body-md text-body-md font-semibold hover:bg-[var(--primary-fixed)] transition-colors">
+            </button>
+            <button
+              className="bg-[var(--primary)] text-[var(--on-primary)] px-md py-sm rounded font-body-md text-body-md font-semibold hover:bg-[var(--primary-fixed)] transition-colors"
+              onClick={handleCreateCase}
+            >
             Create Case
-          </button>
+            </button>
+          </div>
+          {actionNotice && (
+            <span className="text-xs text-[var(--on-surface-variant)]">{actionNotice}</span>
+          )}
         </div>
       </div>
 
@@ -242,7 +271,7 @@ function InvestigationContent() {
             </div>
             {/* Graph Canvas */}
             <div className="absolute inset-0 flex items-center justify-center">
-              <div className="relative w-full h-full">
+              <div className="relative w-full h-full" style={{ transform: `scale(${graphScale})`, transformOrigin: 'center' }}>
                 {/* Dot Grid Background */}
                 <div
                   className="absolute inset-0"
@@ -254,57 +283,71 @@ function InvestigationContent() {
                 />
                 {/* SVG Connections */}
                 <svg className="absolute inset-0 w-full h-full" viewBox="0 0 800 400" preserveAspectRatio="xMidYMid meet">
-                  {/* Edge: user_12 -> ws-882 (dashed) */}
-                  <line
-                    x1="180"
-                    y1="200"
-                    x2="380"
-                    y2="100"
-                    stroke="var(--outline-variant)"
-                    strokeWidth="2"
-                    strokeDasharray="6 4"
-                  />
-                  {/* Edge: ws-882 -> finance_bucket (red, anomalous) */}
-                  <line
-                    x1="420"
-                    y1="100"
-                    x2="620"
-                    y2="200"
-                    stroke="var(--error)"
-                    strokeWidth="2"
-                    filter="drop-shadow(0 0 4px rgba(255,180,171,0.4))"
-                  />
+                  {inv.graph.edges.map((edge) => {
+                    const source = inv.graph.nodes.find((node) => node.id === edge.source);
+                    const target = inv.graph.nodes.find((node) => node.id === edge.target);
+                    if (!source || !target) return null;
+                    return (
+                      <line
+                        key={`${edge.source}-${edge.target}`}
+                        x1={source.x}
+                        y1={source.y}
+                        x2={target.x}
+                        y2={target.y}
+                        stroke={edge.anomalous ? 'var(--error)' : 'var(--outline-variant)'}
+                        strokeWidth="2"
+                        strokeDasharray={edge.dashed ? '6 4' : undefined}
+                        filter={edge.anomalous ? 'drop-shadow(0 0 4px rgba(255,180,171,0.4))' : undefined}
+                      />
+                    );
+                  })}
                 </svg>
-                {/* Nodes */}
-                {/* Node: user_12 */}
-                <div className="absolute left-[15%] top-[40%] flex flex-col items-center gap-xs z-10">
-                  <div className="w-14 h-14 rounded-full bg-[var(--surface-container)] border-2 border-[var(--primary)] flex items-center justify-center glow-primary">
-                    <span className="material-symbols-outlined text-[var(--primary)] text-[24px]">person</span>
-                  </div>
-                  <span className="font-code-sm text-code-sm text-[var(--on-surface-variant)]">{inv.entity}</span>
-                </div>
-                {/* Node: ws-882 */}
-                <div className="absolute left-[45%] top-[12%] flex flex-col items-center gap-xs z-10">
-                  <div className="w-10 h-10 rounded bg-[var(--surface-container)] border border-[var(--outline-variant)] flex items-center justify-center">
-                    <span className="material-symbols-outlined text-[var(--on-surface-variant)] text-[18px]">laptop_mac</span>
-                  </div>
-                  <span className="font-code-sm text-code-sm text-[var(--on-surface-variant)]">ws-882</span>
-                </div>
-                {/* Node: finance_bucket */}
-                <div className="absolute right-[15%] top-[40%] flex flex-col items-center gap-xs z-10">
-                  <div className="w-14 h-14 rounded-lg bg-[var(--error-container)]/10 border-2 border-[var(--error)] flex items-center justify-center glow-error">
-                    <span className="material-symbols-outlined text-[var(--error)] text-[24px]">folder_special</span>
-                  </div>
-                  <span className="font-code-sm text-code-sm text-[var(--error)]">finance_bucket</span>
-                </div>
+                {inv.graph.nodes.map((node) => {
+                  const style = nodeStyleByKind[node.kind];
+                  const accentClass =
+                    node.status === 'anomalous'
+                      ? 'text-[var(--error)] border-[var(--error)] glow-error'
+                      : node.status === 'suspicious'
+                      ? 'text-[var(--tertiary)] border-[var(--tertiary)]'
+                      : 'text-[var(--on-surface-variant)] border-[var(--outline-variant)]';
+
+                  return (
+                    <div
+                      key={node.id}
+                      className="absolute flex flex-col items-center gap-xs z-10"
+                      style={{
+                        left: `${(node.x / 800) * 100}%`,
+                        top: `${(node.y / 400) * 100}%`,
+                        transform: 'translate(-50%, -50%)',
+                      }}
+                    >
+                      <div
+                        className={`w-14 h-14 ${style.shape} ${style.fill} border-2 flex items-center justify-center ${accentClass}`}
+                      >
+                        <span className={`material-symbols-outlined ${node.status === 'anomalous' ? 'text-[var(--error)]' : node.status === 'suspicious' ? 'text-[var(--tertiary)]' : 'text-[var(--on-surface-variant)]'} text-[24px]`}>
+                          {style.icon}
+                        </span>
+                      </div>
+                      <span className={`font-code-sm text-code-sm ${node.status === 'anomalous' ? 'text-[var(--error)]' : 'text-[var(--on-surface-variant)]'}`}>
+                        {node.label}
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
             </div>
             {/* Graph Controls */}
             <div className="absolute bottom-md right-md flex gap-sm bg-[var(--surface)]/50 backdrop-blur rounded p-1 border border-[var(--outline-variant)] z-10">
-              <button className="p-xs text-[var(--on-surface-variant)] hover:text-[var(--on-surface)] hover:bg-[var(--surface-variant)] rounded">
+              <button
+                className="p-xs text-[var(--on-surface-variant)] hover:text-[var(--on-surface)] hover:bg-[var(--surface-variant)] rounded"
+                onClick={handleZoomIn}
+              >
                 <span className="material-symbols-outlined text-[18px]">zoom_in</span>
               </button>
-              <button className="p-xs text-[var(--on-surface-variant)] hover:text-[var(--on-surface)] hover:bg-[var(--surface-variant)] rounded">
+              <button
+                className="p-xs text-[var(--on-surface-variant)] hover:text-[var(--on-surface)] hover:bg-[var(--surface-variant)] rounded"
+                onClick={handleZoomOut}
+              >
                 <span className="material-symbols-outlined text-[18px]">zoom_out</span>
               </button>
             </div>
@@ -316,7 +359,7 @@ function InvestigationContent() {
             <div className="relative flex flex-col gap-0 pl-sm">
               {/* Vertical Line */}
               <div className="absolute left-[23px] top-4 bottom-4 w-px bg-[var(--outline-variant)]" />
-              {inv.events.map((event: any, index: number) => (
+              {inv.events.map((event, index) => (
                 <div key={index} className={`flex gap-md relative group ${index < inv.events.length - 1 ? 'pb-lg' : ''}`}>
                   <div
                     className={`w-10 h-10 rounded-full flex items-center justify-center z-10 ${
@@ -356,9 +399,11 @@ function InvestigationContent() {
                     >
                       {event.title}
                     </div>
-                    {event.detail && (
+                    {event.detailLines && (
                       <div className="bg-[var(--surface-variant)] p-sm rounded mt-2 font-code-sm text-code-sm border-l-2 border-[var(--error)]">
-                        {event.detail}
+                        {event.detailLines.map((line) => (
+                          <div key={line}>{line}</div>
+                        ))}
                       </div>
                     )}
                   </div>

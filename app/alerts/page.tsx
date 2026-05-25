@@ -1,77 +1,23 @@
 "use client";
 
-import { useState } from 'react';
-import { Filter, Download, ChevronRight, Clock } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Filter } from 'lucide-react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
+import { fetchJson } from '@/lib/client-api';
 
-const alerts = [
-  {
-    id: 'ALT-1024',
-    severity: 'critical',
-    user: 'j.smith@company.com',
-    action: 'Unauthorized S3 bucket access',
-    resource: 's3://confidential-data',
-    time: '2 min ago',
-    score: 94,
-    status: 'new',
-    awsService: 'S3',
-  },
-  {
-    id: 'ALT-1023',
-    severity: 'warning',
-    user: 'm.johnson@company.com',
-    action: 'Unusual IAM role assumption',
-    resource: 'arn:aws:iam::123456789012:role/Admin',
-    time: '15 min ago',
-    score: 72,
-    status: 'investigating',
-    awsService: 'IAM',
-  },
-  {
-    id: 'ALT-1022',
-    severity: 'warning',
-    user: 'r.williams@company.com',
-    action: 'Data exfiltration attempt detected',
-    resource: 'ec2:i-0abc123def456',
-    time: '28 min ago',
-    score: 68,
-    status: 'new',
-    awsService: 'EC2',
-  },
-  {
-    id: 'ALT-1021',
-    severity: 'safe',
-    user: 'k.brown@company.com',
-    action: 'Login from new location',
-    resource: 'Console Login',
-    time: '45 min ago',
-    score: 23,
-    status: 'resolved',
-    awsService: 'Console',
-  },
-  {
-    id: 'ALT-1020',
-    severity: 'critical',
-    user: 'a.davis@company.com',
-    action: 'Mass download from DynamoDB',
-    resource: 'dynamodb:prod-users-table',
-    time: '1 hr ago',
-    score: 89,
-    status: 'investigating',
-    awsService: 'DynamoDB',
-  },
-  {
-    id: 'ALT-1019',
-    severity: 'warning',
-    user: 't.wilson@company.com',
-    action: 'Security group modification',
-    resource: 'sg-0abc123def456',
-    time: '2 hr ago',
-    score: 56,
-    status: 'resolved',
-    awsService: 'VPC',
-  },
-];
+type AlertItem = {
+  id: string;
+  severity: string;
+  userName: string;
+  action: string;
+  resource: string;
+  timeAgo: string;
+  createdAt: string;
+  score: number;
+  status: string;
+  awsService: string;
+};
 
 function SeverityBadge({ severity }: { severity: string }) {
   const styles: any = {
@@ -106,9 +52,81 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 export default function AlertsPage() {
+  const searchParams = useSearchParams();
+  const searchKey = searchParams.toString();
   const [filter, setFilter] = useState('all');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [userFilter, setUserFilter] = useState('');
+  const [timeRange, setTimeRange] = useState('30');
+  const [alerts, setAlerts] = useState<AlertItem[]>([]);
+  const [page, setPage] = useState(1);
+  const pageSize = 12;
 
-  const filteredAlerts = filter === 'all' ? alerts : alerts.filter((a) => a.severity === filter);
+  useEffect(() => {
+    let isMounted = true;
+    fetchJson<{ alerts: AlertItem[] }>('/api/alerts')
+      .then((data) => {
+        if (isMounted) setAlerts(data.alerts);
+      })
+      .catch(() => undefined);
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    const severity = searchParams.get('severity');
+    if (severity && ['all', 'critical', 'warning', 'safe'].includes(severity)) {
+      setFilter(severity);
+    }
+    const user = searchParams.get('user');
+    if (user) {
+      setUserFilter(user);
+    }
+    const query = searchParams.get('q');
+    if (query) {
+      setSearchTerm(query);
+    }
+    const range = searchParams.get('range');
+    if (range && ['1', '7', '30'].includes(range)) {
+      setTimeRange(range);
+    }
+  }, [searchKey, searchParams]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [filter, searchTerm, userFilter, timeRange]);
+
+  const latestAlertTime = useMemo(() => {
+    if (alerts.length === 0) return Date.now();
+    return Math.max(...alerts.map((alert) => new Date(alert.createdAt).getTime()));
+  }, [alerts]);
+
+  const filteredAlerts = useMemo(() => {
+    const rangeDays = Number(timeRange);
+    const minDate = Number.isNaN(rangeDays)
+      ? 0
+      : latestAlertTime - rangeDays * 24 * 60 * 60 * 1000;
+    return alerts.filter((alert) => {
+      const matchSeverity = filter === 'all' || alert.severity === filter;
+      const matchSearch = !searchTerm
+        || `${alert.id} ${alert.action} ${alert.resource} ${alert.awsService}`
+          .toLowerCase()
+          .includes(searchTerm.toLowerCase());
+      const matchUser = !userFilter
+        || alert.userName.toLowerCase().includes(userFilter.toLowerCase());
+      const matchTime = !rangeDays || new Date(alert.createdAt).getTime() >= minDate;
+      return matchSeverity && matchSearch && matchUser && matchTime;
+    });
+  }, [alerts, filter, latestAlertTime, searchTerm, timeRange, userFilter]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredAlerts.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const pageStart = (currentPage - 1) * pageSize;
+  const pageItems = filteredAlerts.slice(pageStart, pageStart + pageSize);
+  const showingFrom = filteredAlerts.length === 0 ? 0 : pageStart + 1;
+  const showingTo = Math.min(filteredAlerts.length, pageStart + pageSize);
+
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden">
       <div className="flex-1 overflow-y-auto p-6 flex flex-col gap-6">
@@ -117,7 +135,12 @@ export default function AlertsPage() {
             <label className="font-label-caps text-[var(--on-surface-variant)] mb-1 block">Search</label>
             <div className="relative">
               <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-[var(--on-surface-variant)]">search</span>
-              <input className="w-full bg-[#0f172a] border border-[var(--outline-variant)] rounded-lg py-2 pl-10 pr-3 text-[var(--on-surface)]" placeholder="Search by User, ID, or IP..." />
+              <input
+                className="w-full bg-[#0f172a] border border-[var(--outline-variant)] rounded-lg py-2 pl-10 pr-3 text-[var(--on-surface)]"
+                placeholder="Search by User, ID, or IP..."
+                value={searchTerm}
+                onChange={(event) => setSearchTerm(event.target.value)}
+              />
             </div>
           </div>
 
@@ -135,7 +158,12 @@ export default function AlertsPage() {
             <label className="font-label-caps text-[var(--on-surface-variant)] mb-1 block">Target User</label>
             <div className="relative">
               <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-[var(--on-surface-variant)]">person</span>
-              <input className="w-full bg-[#0f172a] border border-[var(--outline-variant)] rounded-lg py-2 pl-10 pr-3 text-[var(--on-surface)]" placeholder="Filter user..." />
+              <input
+                className="w-full bg-[#0f172a] border border-[var(--outline-variant)] rounded-lg py-2 pl-10 pr-3 text-[var(--on-surface)]"
+                placeholder="Filter user..."
+                value={userFilter}
+                onChange={(event) => setUserFilter(event.target.value)}
+              />
             </div>
           </div>
 
@@ -143,18 +171,29 @@ export default function AlertsPage() {
             <label className="font-label-caps text-[var(--on-surface-variant)] mb-1 block">Time Range</label>
             <div className="relative">
               <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-[var(--on-surface-variant)]">calendar_month</span>
-              <select className="w-full bg-[#0f172a] border border-[var(--outline-variant)] rounded-lg py-2 pl-10 pr-3 text-[var(--on-surface)]">
-                <option>Last 24 Hours</option>
-                <option>Last 7 Days</option>
-                <option>Last 30 Days</option>
-                <option>Custom Range...</option>
+              <select
+                className="w-full bg-[#0f172a] border border-[var(--outline-variant)] rounded-lg py-2 pl-10 pr-3 text-[var(--on-surface)]"
+                value={timeRange}
+                onChange={(event) => setTimeRange(event.target.value)}
+              >
+                <option value="1">Last 24 Hours</option>
+                <option value="7">Last 7 Days</option>
+                <option value="30">Last 30 Days</option>
               </select>
             </div>
           </div>
 
-          <button className="bg-[var(--surface-variant)] text-[var(--on-surface)] border border-[var(--outline-variant)] px-4 py-2 rounded-lg flex items-center gap-2">
+          <button
+            className="bg-[var(--surface-variant)] text-[var(--on-surface)] border border-[var(--outline-variant)] px-4 py-2 rounded-lg flex items-center gap-2"
+            onClick={() => {
+              setFilter('all');
+              setSearchTerm('');
+              setUserFilter('');
+              setTimeRange('30');
+            }}
+          >
             <Filter className="w-4 h-4" />
-            Filter
+            Reset Filters
           </button>
         </section>
 
@@ -171,17 +210,17 @@ export default function AlertsPage() {
           </div>
 
           <div className="overflow-y-auto flex-1">
-            {filteredAlerts.map((a) => (
+            {pageItems.map((a) => (
               <div key={a.id} className={`grid grid-cols-12 gap-2 px-6 py-4 data-table-row items-center group relative ${a.severity === 'critical' ? 'bg-error/5' : ''}`}>
                 {a.severity === 'critical' && <div className="absolute left-0 top-0 bottom-0 w-1 bg-error" />}
                 <div className="col-span-1 font-mono text-[var(--on-surface)]">{a.id.replace('ALT-', 'A-')}</div>
-                <div className="col-span-2 text-[var(--on-surface-variant)] text-sm">{a.time}<br /><span className="text-xs opacity-70">Today</span></div>
+                <div className="col-span-2 text-[var(--on-surface-variant)] text-sm">{a.timeAgo}<br /><span className="text-xs opacity-70">Last 30 days</span></div>
                 <div className="col-span-2 flex items-center gap-2">
                   <span className="material-symbols-outlined text-sm text-[var(--on-surface-variant)]">account_circle</span>
-                  <span className="font-mono truncate">{a.user.split('@')[0]}</span>
+                  <span className="font-mono truncate">{a.userName}</span>
                 </div>
                 <div className="col-span-2 truncate">{a.action}</div>
-                <div className="col-span-1 font-mono font-semibold">{a.score >= 0.7 ? a.score.toFixed(2) : (a.score * 100).toFixed(0)}</div>
+                <div className="col-span-1 font-mono font-semibold">{a.score}</div>
                 <div className="col-span-1">
                   <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${a.severity === 'critical' ? 'bg-error/20 text-error border border-error/50 glow-critical' : a.severity === 'warning' ? 'bg-yellow-100/20 text-yellow-400 border border-yellow-300 glow-warning' : 'bg-green-100/20 text-green-400 border border-green-300 glow-safe'}`}>
                     {a.severity === 'critical' ? 'Critical' : a.severity === 'warning' ? 'High' : 'Low'}
@@ -194,20 +233,30 @@ export default function AlertsPage() {
                   </span>
                 </div>
                 <div className="col-span-1 text-right">
-                  <Link href={`/investigation?id=${a.id.replace('ALT-', 'A-')}`} className="bg-transparent border border-[var(--outline-variant)] text-[var(--on-surface)] hover:border-[var(--primary)] hover:text-[var(--primary)] px-3 py-1 rounded text-sm font-medium transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100 inline-block text-center">Details</Link>
+                  {a.severity === 'critical' && (
+                    <Link href={`/investigation?id=${a.id.replace('ALT-', 'A-')}`} className="bg-transparent border border-[var(--outline-variant)] text-[var(--on-surface)] hover:border-[var(--primary)] hover:text-[var(--primary)] px-3 py-1 rounded text-sm font-medium transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100 inline-block text-center">Details</Link>
+                  )}
                 </div>
               </div>
             ))}
           </div>
 
           <div className="bg-[#0b1326] border-t border-[var(--outline-variant)] px-6 py-3 flex justify-between items-center">
-            <span className="text-[var(--on-surface-variant)] text-sm">Showing 1-{filteredAlerts.length} of {alerts.length} detections</span>
+            <span className="text-[var(--on-surface-variant)] text-sm">Showing {showingFrom}-{showingTo} of {filteredAlerts.length} detections</span>
             <div className="flex items-center gap-2">
-              <button className="p-1 rounded text-[var(--on-surface-variant)] hover:bg-[var(--surface-variant)]">
+              <button
+                className={`p-1 rounded text-[var(--on-surface-variant)] hover:bg-[var(--surface-variant)] ${currentPage === 1 ? 'opacity-40 cursor-not-allowed' : ''}`}
+                onClick={() => setPage(Math.max(1, currentPage - 1))}
+                disabled={currentPage === 1}
+              >
                 <span className="material-symbols-outlined text-sm">chevron_left</span>
               </button>
-              <span className="font-mono text-xs text-[var(--on-surface)]">Page 1 of 12</span>
-              <button className="p-1 rounded text-[var(--on-surface-variant)] hover:bg-[var(--surface-variant)]">
+              <span className="font-mono text-xs text-[var(--on-surface)]">Page {currentPage} of {totalPages}</span>
+              <button
+                className={`p-1 rounded text-[var(--on-surface-variant)] hover:bg-[var(--surface-variant)] ${currentPage >= totalPages ? 'opacity-40 cursor-not-allowed' : ''}`}
+                onClick={() => setPage(Math.min(totalPages, currentPage + 1))}
+                disabled={currentPage >= totalPages}
+              >
                 <span className="material-symbols-outlined text-sm">chevron_right</span>
               </button>
             </div>

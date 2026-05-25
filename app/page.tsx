@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   Shield,
@@ -18,90 +19,32 @@ import {
   AreaChart,
   Area,
 } from 'recharts';
+import Link from 'next/link';
+import { fetchJson } from '@/lib/client-api';
 
-const threatData = [
-  { time: '00:00', threats: 12, normal: 45 },
-  { time: '04:00', threats: 8, normal: 52 },
-  { time: '08:00', threats: 23, normal: 78 },
-  { time: '12:00', threats: 45, normal: 92 },
-  { time: '16:00', threats: 38, normal: 85 },
-  { time: '20:00', threats: 19, normal: 61 },
-  { time: '24:00', threats: 15, normal: 48 },
-];
-
-const recentAlerts = [
-  {
-    id: 'ALT-1024',
-    severity: 'critical',
-    user: 'j.smith@company.com',
-    action: 'Unauthorized S3 bucket access',
-    resource: 's3://confidential-data',
-    time: '2 min ago',
-    score: 94,
-  },
-  {
-    id: 'ALT-1023',
-    severity: 'warning',
-    user: 'm.johnson@company.com',
-    action: 'Unusual IAM role assumption',
-    resource: 'arn:aws:iam::123456789012:role/Admin',
-    time: '15 min ago',
-    score: 72,
-  },
-  {
-    id: 'ALT-1022',
-    severity: 'warning',
-    user: 'r.williams@company.com',
-    action: 'Data exfiltration attempt detected',
-    resource: 'ec2:i-0abc123def456',
-    time: '28 min ago',
-    score: 68,
-  },
-  {
-    id: 'ALT-1021',
-    severity: 'safe',
-    user: 'k.brown@company.com',
-    action: 'Login from new location',
-    resource: 'Console Login',
-    time: '45 min ago',
-    score: 23,
-  },
-];
-
-const kpiCards = [
-  {
-    title: 'Active Threats',
-    value: '12',
-    change: '+3',
-    changeType: 'increase',
-    icon: AlertTriangle,
-    color: 'secondary',
-  },
-  {
-    title: 'Users Monitored',
-    value: '1,284',
-    change: '+24',
-    changeType: 'increase',
-    icon: Users,
-    color: 'primary',
-  },
-  {
-    title: 'Avg Risk Score',
-    value: '67',
-    change: '-5',
-    changeType: 'decrease',
-    icon: Activity,
-    color: 'tertiary',
-  },
-  {
-    title: 'Protected Resources',
-    value: '456',
-    change: '+12',
-    changeType: 'increase',
-    icon: Shield,
-    color: 'primary',
-  },
-];
+type AnalyticsResponse = {
+  analytics: {
+    lastUpdated: string;
+    kpis: Array<{
+      title: string;
+      value: string;
+      change: string;
+      changeType: 'increase' | 'decrease';
+      color: 'primary' | 'secondary' | 'tertiary';
+    }>;
+    threatData: Array<{ time: string; threats: number; normal: number }>;
+    distribution: { critical: number; warning: number; safe: number; total: number };
+    recentAlerts: Array<{
+      id: string;
+      severity: string;
+      userName: string;
+      action: string;
+      resource: string;
+      timeAgo: string;
+      score: number;
+    }>;
+  };
+};
 
 function KPICard({ title, value, change, changeType, icon: Icon, color }: any) {
   const colorMap: any = {
@@ -171,7 +114,7 @@ const getAlertLabels = (severity: string) => {
   if (severity === 'warning') {
     return { severityLabel: 'HIGH', statusLabel: 'Active', actionLabel: 'VIEW GRAPH' };
   }
-  return { severityLabel: 'LOW', statusLabel: 'New', actionLabel: 'ASSIGN' };
+  return { severityLabel: 'LOW', statusLabel: 'New', actionLabel: 'VIEW ALERTS' };
 };
 
 const getScoreStyles = (score: number) => {
@@ -204,6 +147,59 @@ const getSeverityBadgeClass = (severity: string) => {
 };
 
 export default function Dashboard() {
+  const [analytics, setAnalytics] = useState<AnalyticsResponse['analytics'] | null>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+    fetchJson<AnalyticsResponse>('/api/analytics')
+      .then((data) => {
+        if (isMounted) {
+          setAnalytics(data.analytics);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const kpiCards = useMemo(() => {
+    if (!analytics) return [];
+    const iconMap = {
+      'Active Threats': AlertTriangle,
+      'Users Monitored': Users,
+      'Avg Risk Score': Activity,
+      'Protected Resources': Shield,
+    } as const;
+
+    return analytics.kpis.map((card) => ({
+      ...card,
+      icon: iconMap[card.title as keyof typeof iconMap] ?? Shield,
+    }));
+  }, [analytics]);
+
+  const threatData = analytics?.threatData ?? [];
+  const recentAlerts = analytics?.recentAlerts ?? [];
+  const distribution = analytics?.distribution ?? { critical: 0, warning: 0, safe: 0, total: 0 };
+  const donutRadius = 40;
+  const donutCircumference = 2 * Math.PI * donutRadius;
+  const donutTotal = Math.max(distribution.total, 1);
+  const safeArc = (distribution.safe / donutTotal) * donutCircumference;
+  const warningArc = (distribution.warning / donutTotal) * donutCircumference;
+  const criticalArc = (distribution.critical / donutTotal) * donutCircumference;
+  const warningOffset = -safeArc;
+  const criticalOffset = -(safeArc + warningArc);
+
+  const getAlertHref = (alert: AnalyticsResponse['analytics']['recentAlerts'][number]) => {
+    if (alert.severity === 'critical') {
+      return `/investigation?id=${alert.id.replace('ALT-', 'A-')}`;
+    }
+    if (alert.severity === 'warning') {
+      return '/analytics';
+    }
+    return `/alerts?severity=safe&user=${encodeURIComponent(alert.userName)}`;
+  };
+
   return (
     <div className="space-y-6">
       {/* Page header */}
@@ -216,7 +212,9 @@ export default function Dashboard() {
         </div>
         <div className="flex items-center gap-2 text-sm text-[var(--on-surface-variant)]">
           <Clock className="w-4 h-4" />
-          <span className="font-mono">Last updated: 2026-05-19 17:28:45 UTC</span>
+          <span className="font-mono">
+            Last updated: {analytics?.lastUpdated ?? 'Loading...'} UTC
+          </span>
         </div>
       </div>
 
@@ -294,43 +292,45 @@ export default function Dashboard() {
               <svg className="w-full h-full transform -rotate-90" viewBox="0 0 100 100">
                 {/* Background track */}
                 <circle cx="50" cy="50" fill="none" r="40" stroke="var(--surface-container-highest)" strokeWidth="12" />
-                {/* Safe (Green) 69% */}
+                {/* Safe (Green) */}
                 <circle
                   cx="50"
                   cy="50"
                   fill="none"
                   r="40"
                   stroke="var(--primary)"
-                  strokeDasharray="172.9 251.2"
+                  strokeDasharray={`${safeArc} ${donutCircumference}`}
                   strokeDashoffset="0"
                   strokeWidth="12"
                 />
-                {/* Warning (Amber) 23% */}
+                {/* Warning (Amber) */}
                 <circle
                   cx="50"
                   cy="50"
                   fill="none"
                   r="40"
                   stroke="var(--tertiary)"
-                  strokeDasharray="57.8 251.2"
-                  strokeDashoffset="-172.9"
+                  strokeDasharray={`${warningArc} ${donutCircumference}`}
+                  strokeDashoffset={`${warningOffset}`}
                   strokeWidth="12"
                 />
-                {/* Critical (Red) 8% */}
+                {/* Critical (Red) */}
                 <circle
                   cx="50"
                   cy="50"
                   fill="none"
                   r="40"
                   stroke="var(--secondary)"
-                  strokeDasharray="20.1 251.2"
-                  strokeDashoffset="-230.7"
+                  strokeDasharray={`${criticalArc} ${donutCircumference}`}
+                  strokeDashoffset={`${criticalOffset}`}
                   strokeWidth="12"
                 />
               </svg>
               {/* Center text */}
               <div className="absolute inset-0 flex flex-col items-center justify-center">
-                <span className="text-2xl font-bold text-[var(--on-surface)] leading-none">82</span>
+                <span className="text-2xl font-bold text-[var(--on-surface)] leading-none">
+                  {distribution.total}
+                </span>
                 <span className="text-xs font-mono text-[var(--on-surface-variant)]">TOTAL</span>
               </div>
             </div>
@@ -341,21 +341,21 @@ export default function Dashboard() {
                   <div className="w-3 h-3 rounded bg-[var(--secondary)]" />
                   <span className="text-sm text-[var(--on-surface)]">Critical</span>
                 </div>
-                <span className="text-xs font-mono text-[var(--on-surface)]">8</span>
+                <span className="text-xs font-mono text-[var(--on-surface)]">{distribution.critical}</span>
               </div>
               <div className="flex justify-between items-center px-3 py-1 rounded">
                 <div className="flex items-center gap-2">
                   <div className="w-3 h-3 rounded bg-[var(--tertiary)]" />
                   <span className="text-sm text-[var(--on-surface-variant)]">Warning</span>
                 </div>
-                <span className="text-xs font-mono text-[var(--on-surface-variant)]">23</span>
+                <span className="text-xs font-mono text-[var(--on-surface-variant)]">{distribution.warning}</span>
               </div>
               <div className="flex justify-between items-center px-3 py-1 rounded">
                 <div className="flex items-center gap-2">
                   <div className="w-3 h-3 rounded bg-[var(--primary)]" />
                   <span className="text-sm text-[var(--on-surface-variant)]">Safe</span>
                 </div>
-                <span className="text-xs font-mono text-[var(--on-surface-variant)]">69</span>
+                <span className="text-xs font-mono text-[var(--on-surface-variant)]">{distribution.safe}</span>
               </div>
             </div>
           </div>
@@ -369,9 +369,12 @@ export default function Dashboard() {
             <AlertTriangle className="w-5 h-5 text-[var(--error)]" />
             Recent Alerts
           </h2>
-          <button className="font-label-caps text-label-caps text-[var(--primary)] hover:text-[var(--primary-fixed)] transition-colors">
-            VIEW ALL IN INVESTIGATION
-          </button>
+          <Link
+            href="/alerts"
+            className="font-label-caps text-label-caps text-[var(--primary)] hover:text-[var(--primary-fixed)] transition-colors"
+          >
+            VIEW ALL
+          </Link>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse">
@@ -389,7 +392,10 @@ export default function Dashboard() {
               {recentAlerts.map((alert) => {
                 const { severityLabel, statusLabel, actionLabel } = getAlertLabels(alert.severity);
                 const scoreDecimal = (alert.score / 100).toFixed(2);
-                const initials = alert.user.split('@')[0].split('.').map((n: string) => n[0].toUpperCase()).join('');
+                const initials = alert.userName
+                  .split(/\s|\./)
+                  .map((n: string) => n[0]?.toUpperCase())
+                  .join('');
                 const scoreStyles = getScoreStyles(alert.score);
                 const severityBadgeClass = getSeverityBadgeClass(alert.severity);
 
@@ -404,7 +410,7 @@ export default function Dashboard() {
                         <div className="w-6 h-6 rounded-full bg-[var(--surface-bright)] flex items-center justify-center text-xs">
                           {initials}
                         </div>
-                        <span>{alert.user}</span>
+                        <span>{alert.userName}</span>
                       </div>
                     </td>
                     <td className="py-3 px-md">
@@ -440,7 +446,8 @@ export default function Dashboard() {
                       )}
                     </td>
                     <td className="py-3 px-md text-right">
-                      <button
+                      <Link
+                        href={getAlertHref(alert)}
                         className={`px-3 py-1 text-sm font-bold rounded transition-colors ${
                           alert.severity === 'critical'
                             ? 'bg-[var(--primary-container)] text-[var(--on-primary-container)] hover:bg-[var(--primary-fixed)]'
@@ -448,7 +455,7 @@ export default function Dashboard() {
                         }`}
                       >
                         {actionLabel}
-                      </button>
+                      </Link>
                     </td>
                   </tr>
                 );

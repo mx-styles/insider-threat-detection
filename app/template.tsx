@@ -14,8 +14,9 @@ import {
   UserCircle,
   Menu,
   X,
-  ChevronDown,
+  LogOut,
 } from 'lucide-react';
+import { useAuth } from '@/contexts/AuthContext';
 
 const AwsIcon = ({ className }: { className?: string }) => (
   <img src="/aws-color.svg" alt="AWS" className={className} />
@@ -24,8 +25,7 @@ const AwsIcon = ({ className }: { className?: string }) => (
 const navigation = [
   { name: 'Security Dashboard', href: '/', icon: Shield },
   { name: 'Alert Center', href: '/alerts', icon: AlertTriangle },
-  { name: 'Investigation', href: '/investigation', icon: Search },
-  { name: 'User Profiles', href: '/users', icon: Users },
+  { name: 'Employee Profiles', href: '/users', icon: Users },
   { name: 'Behavioral Analytics', href: '/analytics', icon: Activity },
   { name: 'Audit Logs', href: '/audit-logs', icon: FileText },
   { name: 'Settings', href: '/settings', icon: Settings },
@@ -33,8 +33,19 @@ const navigation = [
 
 export default function Template({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const { user, loading, logout } = useAuth();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
+
+  const isLoginPage = pathname === '/login';
+
+  const initials = user?.name
+    ? user.name.split(' ').map((n) => n[0]).join('').toUpperCase().slice(0, 2)
+    : '?';
+
+  if (isLoginPage) {
+    return <>{children}</>;
+  }
 
   return (
     <div className="min-h-screen bg-[var(--background)]">
@@ -93,16 +104,15 @@ export default function Template({ children }: { children: React.ReactNode }) {
           </nav>
 
           <div className="px-4 py-4 border-t border-[var(--outline-variant)]">
-            <button className="flex items-center gap-3 w-full px-3 py-2 rounded-lg hover:bg-[var(--surface-container-high)] transition-colors">
+            <div className="flex items-center gap-3 w-full px-3 py-2 rounded-lg">
               <div className="w-8 h-8 rounded-full bg-[var(--primary-container)] flex items-center justify-center">
-                <span className="text-xs font-semibold text-[var(--on-primary)]">JD</span>
+                <span className="text-xs font-semibold text-[var(--on-primary)]">{initials}</span>
               </div>
               <div className="flex-1 text-left">
-                <p className="text-sm font-medium text-[var(--on-surface)]">Jonathan Doe</p>
-                <p className="text-xs text-[var(--on-surface-variant)]">SOC Analyst</p>
+                <p className="text-sm font-medium text-[var(--on-surface)]">{user?.name ?? (loading ? 'Loading...' : 'Not signed in')}</p>
+                <p className="text-xs text-[var(--on-surface-variant)]">{user?.role ?? ''}</p>
               </div>
-              <ChevronDown className="w-4 h-4 text-[var(--on-surface-variant)]" />
-            </button>
+            </div>
           </div>
         </div>
       </aside>
@@ -127,9 +137,9 @@ export default function Template({ children }: { children: React.ReactNode }) {
               </div>
             </div>
             <div className="flex items-center gap-3">
-              <button className="relative p-2 rounded-lg hover:bg-[var(--surface-container-high)] transition-colors">
+              <Link href="/settings" className="relative p-2 rounded-lg hover:bg-[var(--surface-container-high)] transition-colors">
                 <Settings className="w-5 h-5 text-[var(--on-surface-variant)]" />
-              </button>
+              </Link>
               <div className="relative hidden sm:block">
                 <button
                   className="p-2 rounded-lg bg-[var(--surface-container)] hover:bg-[var(--surface-container-high)] transition-colors"
@@ -143,18 +153,30 @@ export default function Template({ children }: { children: React.ReactNode }) {
                   <div className="absolute right-0 mt-2 w-56 rounded-lg border border-[var(--outline-variant)] bg-[var(--surface-container)] shadow-xl p-3 z-50">
                     <div className="flex items-center gap-3 pb-3 border-b border-[var(--outline-variant)]">
                       <div className="w-10 h-10 rounded-full bg-[var(--primary-container)] flex items-center justify-center">
-                        <span className="text-xs font-semibold text-[var(--on-primary)]">JD</span>
+                        <span className="text-xs font-semibold text-[var(--on-primary)]">{initials}</span>
                       </div>
                       <div className="min-w-0">
-                        <p className="text-sm font-semibold text-[var(--on-surface)] truncate">Jonathan Doe</p>
-                        <p className="text-xs text-[var(--on-surface-variant)]">SOC Analyst</p>
-                        <p className="text-xs text-[var(--on-surface-variant)] truncate">jonathan.doe@company.com</p>
+                        <p className="text-sm font-semibold text-[var(--on-surface)] truncate">{user?.name ?? (loading ? 'Loading...' : 'Not signed in')}</p>
+                        <p className="text-xs text-[var(--on-surface-variant)]">{user?.role ?? ''}</p>
                       </div>
                     </div>
+                    <div className="mt-2 flex flex-col gap-1">
+                      <Link href="/settings/profile" onClick={() => setProfileOpen(false)}
+                        className="flex items-center gap-2 px-3 py-2 rounded-md text-sm text-[var(--on-surface)] hover:bg-[var(--surface-container-high)] transition-colors">
+                        <UserCircle className="w-4 h-4" />
+                        Profile
+                      </Link>
+                      <Link href="/settings" onClick={() => setProfileOpen(false)}
+                        className="flex items-center gap-2 px-3 py-2 rounded-md text-sm text-[var(--on-surface)] hover:bg-[var(--surface-container-high)] transition-colors">
+                        <Settings className="w-4 h-4" />
+                        Settings
+                      </Link>
+                    </div>
                     <button
-                      className="mt-3 w-full px-3 py-2 rounded-md border border-[var(--outline-variant)] text-[var(--on-surface)] text-sm hover:bg-[var(--surface-container-high)] transition-colors"
-                      onClick={() => setProfileOpen(false)}
+                      className="mt-3 w-full flex items-center justify-center gap-2 px-3 py-2 rounded-md border border-[var(--outline-variant)] text-[var(--on-surface)] text-sm hover:bg-[var(--surface-container-high)] transition-colors"
+                      onClick={() => { setProfileOpen(false); logout(); }}
                     >
+                      <LogOut className="w-4 h-4" />
                       Log out
                     </button>
                   </div>

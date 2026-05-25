@@ -1,8 +1,99 @@
 'use client';
 
 import Link from 'next/link';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { fetchJson } from '@/lib/client-api';
+
+type UserDetail = {
+  profile: {
+    id: string;
+    name: string;
+    email: string;
+    department: string;
+    role: string;
+    statusLabel: string;
+    riskScore: number;
+    firstSeen: string;
+    location: string;
+    manager: string;
+    managerInitials: string;
+    devices: Array<{ name: string; status: 'trusted' | 'unverified'; type: 'laptop' | 'mobile' }>;
+  };
+  kbis: {
+    afterHoursHours: number;
+    afterHoursWindow: string;
+    resourceAccessDelta: number;
+    resourceLabel: string;
+    geoVelocityLabel: string;
+    geoRoute: { from: string; to: string };
+  };
+  peerComparison: {
+    userLabel: string;
+    exfilGb: number;
+    teamMaxGb: number;
+    teamAvgGb: number;
+  };
+  sensitiveCommands: Array<{ command: string; change: string; severity: 'error' | 'warning' | 'ok' }>;
+  sequences: Array<{
+    id: string;
+    severity: string;
+    risk: number;
+    steps: string[];
+    alertId?: string;
+  }>;
+};
 
 export default function UserDetailPage({ params }: { params: { id: string } }) {
+  const [user, setUser] = useState<UserDetail | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    let isMounted = true;
+    setIsLoading(true);
+    fetchJson<{ user: UserDetail }>(`/api/users/${params.id}`)
+      .then((data) => {
+        if (isMounted) {
+          setUser(data.user);
+          setIsLoading(false);
+        }
+      })
+      .catch(() => {
+        if (isMounted) {
+          setUser(null);
+          setIsLoading(false);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [params.id]);
+
+  const initials = useMemo(() => {
+    if (!user) return '';
+    return user.profile.name
+      .split(/\s|\./)
+      .map((part) => part[0]?.toUpperCase())
+      .join('')
+      .slice(0, 2);
+  }, [user]);
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-64 text-[var(--on-surface-variant)]">
+        Loading user profile...
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="flex items-center justify-center h-64 text-[var(--on-surface-variant)]">
+        User not found.
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-lg">
       {/* Header Section */}
@@ -10,25 +101,40 @@ export default function UserDetailPage({ params }: { params: { id: string } }) {
         <div className="flex items-center gap-md">
           <div className="relative">
             <div className="w-20 h-20 rounded-full bg-[var(--surface-container-high)] flex items-center justify-center border-2 border-[var(--primary-container)] overflow-hidden">
-              <span className="text-3xl font-bold text-[var(--primary)]">JD</span>
+              <span className="text-3xl font-bold text-[var(--primary)]">{initials}</span>
             </div>
             <div className="absolute bottom-0 right-0 w-4 h-4 bg-[var(--primary-container)] rounded-full border-2 border-[var(--surface)] glow-safe" />
           </div>
           <div>
             <h2 className="font-headline-md text-headline-md font-bold text-[var(--on-surface)] flex items-center gap-sm">
-              Jonathan Doe
+              {user.profile.name}
               <span className="px-2 py-0.5 rounded-full bg-[var(--surface-variant)] border border-[var(--outline-variant)] font-label-caps text-label-caps text-[var(--on-surface-variant)] flex items-center gap-1">
                 <span className="w-2 h-2 rounded-full bg-[var(--primary-container)]" /> Active
               </span>
             </h2>
-            <p className="font-body-lg text-body-lg text-[var(--on-surface-variant)] mt-1">Senior Data Engineer • Cloud Infrastructure</p>
+            <p className="font-body-lg text-body-lg text-[var(--on-surface-variant)] mt-1">
+              {user.profile.role} • {user.profile.department}
+            </p>
           </div>
         </div>
         <div className="flex items-center gap-lg">
+          <div className="flex flex-col gap-2">
+            <Link
+              href={`/users/${user.profile.id}/edit`}
+              className="px-3 py-1.5 border border-[var(--outline-variant)] rounded-lg text-xs font-medium text-[var(--on-surface)] hover:bg-[var(--surface-variant)] transition-colors text-center"
+            >
+              Edit
+            </Link>
+            <button
+              className="px-3 py-1.5 border border-[var(--secondary)]/40 rounded-lg text-xs font-medium text-[var(--secondary)] hover:bg-[var(--secondary)]/10 transition-colors"
+            >
+              Deactivate
+            </button>
+          </div>
           <div className="text-right">
             <p className="font-label-caps text-label-caps text-[var(--on-surface-variant)] mb-1 uppercase">Entity Risk Score</p>
             <div className="flex items-baseline gap-2">
-              <span className="font-display-lg text-display-lg text-[var(--error)] font-bold glow-error">78</span>
+              <span className="font-display-lg text-display-lg text-[var(--error)] font-bold glow-error">{user.profile.riskScore}</span>
               <span className="font-code-md text-code-md text-[var(--on-surface-variant)]">/ 100</span>
             </div>
           </div>
@@ -52,21 +158,21 @@ export default function UserDetailPage({ params }: { params: { id: string } }) {
             <ul className="flex flex-col gap-sm">
               <li className="flex flex-col">
                 <span className="font-label-caps text-label-caps text-[var(--on-surface-variant)]">FIRST SEEN</span>
-                <span className="font-code-md text-code-md text-[var(--on-surface)]">2021-04-12 08:30 UTC</span>
+                <span className="font-code-md text-code-md text-[var(--on-surface)]">{user.profile.firstSeen}</span>
               </li>
               <li className="flex flex-col mt-2">
                 <span className="font-label-caps text-label-caps text-[var(--on-surface-variant)]">PRIMARY LOCATION</span>
                 <span className="font-body-md text-body-md text-[var(--on-surface)] flex items-center gap-1">
-                  <span className="material-symbols-outlined text-[var(--on-surface-variant)] text-[16px]">location_on</span> Seattle, WA (US-WEST-2)
+                  <span className="material-symbols-outlined text-[var(--on-surface-variant)] text-[16px]">location_on</span> {user.profile.location}
                 </span>
               </li>
               <li className="flex flex-col mt-2">
                 <span className="font-label-caps text-label-caps text-[var(--on-surface-variant)]">MANAGER</span>
                 <span className="font-body-md text-body-md text-[var(--on-surface)] flex items-center gap-2">
                   <div className="w-6 h-6 rounded-full bg-[var(--surface-container-high)] flex items-center justify-center border border-[var(--outline-variant)]">
-                    <span className="text-[10px] font-bold text-[var(--on-surface-variant)]">SC</span>
+                    <span className="text-[10px] font-bold text-[var(--on-surface-variant)]">{user.profile.managerInitials}</span>
                   </div>
-                  Sarah Connor
+                  {user.profile.manager}
                 </span>
               </li>
             </ul>
@@ -78,24 +184,26 @@ export default function UserDetailPage({ params }: { params: { id: string } }) {
               <span className="material-symbols-outlined text-[var(--primary)]">devices</span> Known Devices
             </h3>
             <div className="flex flex-col gap-sm">
-              <div className="flex items-center justify-between p-sm bg-[var(--surface-container-high)] rounded-lg border border-[var(--outline-variant)]">
-                <div className="flex items-center gap-3">
-                  <span className="material-symbols-outlined text-[var(--on-surface-variant)]">laptop_mac</span>
-                  <div className="flex flex-col">
-                    <span className="font-code-sm text-code-sm text-[var(--on-surface)]">MBP-JDOE-2023</span>
-                    <span className="font-label-caps text-label-caps text-[var(--primary)]">TRUSTED</span>
+              {user.profile.devices.map((device) => (
+                <div
+                  key={device.name}
+                  className={`flex items-center justify-between p-sm bg-[var(--surface-container-high)] rounded-lg border ${
+                    device.status === 'unverified' ? 'border-[var(--error-container)] glow-error' : 'border-[var(--outline-variant)]'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <span className={`material-symbols-outlined ${device.status === 'unverified' ? 'text-[var(--error)]' : 'text-[var(--on-surface-variant)]'}`}>
+                      {device.type === 'laptop' ? 'laptop_mac' : 'smartphone'}
+                    </span>
+                    <div className="flex flex-col">
+                      <span className="font-code-sm text-code-sm text-[var(--on-surface)]">{device.name}</span>
+                      <span className={`font-label-caps text-label-caps ${device.status === 'unverified' ? 'text-[var(--error)]' : 'text-[var(--primary)]'}`}>
+                        {device.status === 'unverified' ? 'UNVERIFIED' : 'TRUSTED'}
+                      </span>
+                    </div>
                   </div>
                 </div>
-              </div>
-              <div className="flex items-center justify-between p-sm bg-[var(--surface-container-high)] rounded-lg border border-[var(--error-container)] glow-error">
-                <div className="flex items-center gap-3">
-                  <span className="material-symbols-outlined text-[var(--error)]">smartphone</span>
-                  <div className="flex flex-col">
-                    <span className="font-code-sm text-code-sm text-[var(--on-surface)]">Unknown iOS Device</span>
-                    <span className="font-label-caps text-label-caps text-[var(--error)]">UNVERIFIED</span>
-                  </div>
-                </div>
-              </div>
+              ))}
             </div>
           </div>
         </div>
@@ -112,8 +220,8 @@ export default function UserDetailPage({ params }: { params: { id: string } }) {
                 <span className="material-symbols-outlined text-[var(--error)]">schedule</span>
               </div>
               <div className="flex items-end gap-2 relative z-10">
-                <span className="font-headline-md text-headline-md text-[var(--error)] font-bold">14 hrs</span>
-                <span className="font-code-sm text-code-sm text-[var(--on-surface-variant)] pb-1">past 7 days</span>
+                <span className="font-headline-md text-headline-md text-[var(--error)] font-bold">{user.kbis.afterHoursHours} hrs</span>
+                <span className="font-code-sm text-code-sm text-[var(--on-surface-variant)] pb-1">{user.kbis.afterHoursWindow}</span>
               </div>
               <div className="mt-4 h-8 w-full bg-[var(--surface-variant)] rounded flex items-end px-1 relative z-10">
                 <div className="w-1/6 h-1/4 bg-[var(--error-container)] rounded-t" />
@@ -133,11 +241,11 @@ export default function UserDetailPage({ params }: { params: { id: string } }) {
                 <span className="material-symbols-outlined text-[var(--tertiary)]">storage</span>
               </div>
               <div className="flex items-end gap-2 relative z-10">
-                <span className="font-headline-md text-headline-md text-[var(--tertiary)] font-bold">+340%</span>
+                <span className="font-headline-md text-headline-md text-[var(--tertiary)] font-bold">+{user.kbis.resourceAccessDelta}%</span>
                 <span className="font-code-sm text-code-sm text-[var(--on-surface-variant)] pb-1">vs baseline</span>
               </div>
               <div className="mt-4 flex items-center gap-2 relative z-10">
-                <span className="px-2 py-1 bg-[var(--surface-variant)] rounded text-[var(--on-surface)] font-code-sm">S3: arn:aws:s3:::prod-data</span>
+                <span className="px-2 py-1 bg-[var(--surface-variant)] rounded text-[var(--on-surface)] font-code-sm">{user.kbis.resourceLabel}</span>
               </div>
             </div>
 
@@ -149,13 +257,13 @@ export default function UserDetailPage({ params }: { params: { id: string } }) {
                 <span className="material-symbols-outlined text-[var(--primary)]">public</span>
               </div>
               <div className="flex items-end gap-2 relative z-10">
-                <span className="font-headline-md text-headline-md text-[var(--on-surface)] font-bold">Normal</span>
+                <span className="font-headline-md text-headline-md text-[var(--on-surface)] font-bold">{user.kbis.geoVelocityLabel}</span>
               </div>
               <div className="mt-4 flex items-center gap-2 relative z-10">
                 <div className="flex items-center gap-1 font-code-sm text-[var(--on-surface-variant)]">
-                  <span>US-W2</span>
+                  <span>{user.kbis.geoRoute.from}</span>
                   <span className="material-symbols-outlined text-[14px]">arrow_right_alt</span>
-                  <span>US-E1</span>
+                  <span>{user.kbis.geoRoute.to}</span>
                 </div>
               </div>
             </div>
@@ -206,8 +314,8 @@ export default function UserDetailPage({ params }: { params: { id: string } }) {
                 <div className="space-y-md">
                   <div className="space-y-1">
                     <div className="flex justify-between font-code-sm text-[var(--on-surface)]">
-                      <span>Jonathan Doe (User)</span>
-                      <span className="text-[var(--error)]">8.4 GB</span>
+                      <span>{user.peerComparison.userLabel} (User)</span>
+                      <span className="text-[var(--error)]">{user.peerComparison.exfilGb.toFixed(1)} GB</span>
                     </div>
                     <div className="h-4 w-full bg-[var(--surface-variant)] rounded-full overflow-hidden">
                       <div className="h-full bg-[var(--error)] glow-error" style={{ width: '100%' }} />
@@ -216,7 +324,7 @@ export default function UserDetailPage({ params }: { params: { id: string } }) {
                   <div className="space-y-1">
                     <div className="flex justify-between font-code-sm text-[var(--on-surface)]">
                       <span>Team Maximum</span>
-                      <span>2.5 GB</span>
+                      <span>{user.peerComparison.teamMaxGb.toFixed(1)} GB</span>
                     </div>
                     <div className="h-4 w-full bg-[var(--surface-variant)] rounded-full overflow-hidden">
                       <div className="h-full bg-[var(--tertiary-container)]" style={{ width: '30%' }} />
@@ -225,7 +333,7 @@ export default function UserDetailPage({ params }: { params: { id: string } }) {
                   <div className="space-y-1">
                     <div className="flex justify-between font-code-sm text-[var(--on-surface)]">
                       <span>Team Average</span>
-                      <span className="text-[var(--primary)]">1.2 GB</span>
+                      <span className="text-[var(--primary)]">{user.peerComparison.teamAvgGb.toFixed(1)} GB</span>
                     </div>
                     <div className="h-4 w-full bg-[var(--surface-variant)] rounded-full overflow-hidden">
                       <div className="h-full bg-[var(--primary-container)]" style={{ width: '14%' }} />
@@ -238,27 +346,19 @@ export default function UserDetailPage({ params }: { params: { id: string } }) {
               <div className="space-y-4">
                 <h4 className="font-label-caps text-label-caps text-[var(--on-surface-variant)] uppercase">Sensitive Command Usage Profile</h4>
                 <div className="space-y-sm">
-                  <div className="flex items-center justify-between p-sm bg-[var(--surface-container-high)] rounded-lg border border-[var(--outline-variant)]">
-                    <span className="font-code-sm text-[var(--on-surface)]">s3:ListBucket</span>
-                    <div className="flex items-center gap-2">
-                      <span className="text-[var(--error)] font-bold">+800%</span>
-                      <span className="material-symbols-outlined text-[var(--error)] text-[18px]">trending_up</span>
+                  {user.sensitiveCommands.map((command) => (
+                    <div key={command.command} className="flex items-center justify-between p-sm bg-[var(--surface-container-high)] rounded-lg border border-[var(--outline-variant)]">
+                      <span className={`font-code-sm ${command.severity === 'ok' ? 'text-[var(--on-surface-variant)]' : 'text-[var(--on-surface)]'}`}>{command.command}</span>
+                      <div className="flex items-center gap-2">
+                        <span className={`${command.severity === 'error' ? 'text-[var(--error)]' : command.severity === 'warning' ? 'text-[var(--tertiary)]' : 'text-[var(--primary)]'} font-bold`}>
+                          {command.change}
+                        </span>
+                        <span className={`material-symbols-outlined ${command.severity === 'error' ? 'text-[var(--error)]' : command.severity === 'warning' ? 'text-[var(--tertiary)]' : 'text-[var(--primary)]'} text-[18px]`}>
+                          {command.severity === 'ok' ? 'check_circle' : 'trending_up'}
+                        </span>
+                      </div>
                     </div>
-                  </div>
-                  <div className="flex items-center justify-between p-sm bg-[var(--surface-container-high)] rounded-lg border border-[var(--outline-variant)]">
-                    <span className="font-code-sm text-[var(--on-surface)]">iam:AssumeRole</span>
-                    <div className="flex items-center gap-2">
-                      <span className="text-[var(--tertiary)] font-bold">+150%</span>
-                      <span className="material-symbols-outlined text-[var(--tertiary)] text-[18px]">trending_up</span>
-                    </div>
-                  </div>
-                  <div className="flex items-center justify-between p-sm bg-[var(--surface-container-high)] rounded-lg border border-[var(--outline-variant)]">
-                    <span className="font-code-sm text-[var(--on-surface-variant)]">ec2:DescribeInstances</span>
-                    <div className="flex items-center gap-2">
-                      <span className="text-[var(--primary)] font-bold">Normal</span>
-                      <span className="material-symbols-outlined text-[var(--primary)] text-[18px]">check_circle</span>
-                    </div>
-                  </div>
+                  ))}
                 </div>
               </div>
             </div>
@@ -272,56 +372,70 @@ export default function UserDetailPage({ params }: { params: { id: string } }) {
               </h3>
             </div>
             <div className="flex flex-col gap-md">
-              {/* Sequence Item 1 */}
-              <div className="p-md bg-[var(--surface-container-high)] rounded-xl border border-[var(--outline-variant)] flex flex-col md:flex-row md:items-center justify-between gap-md">
-                <div className="flex flex-col gap-2">
-                  <div className="flex items-center gap-2">
-                    <span className="font-label-caps text-label-caps text-[var(--on-surface-variant)]">SEQ-042</span>
-                    <span className="text-[var(--error)] font-bold font-code-md underline">CRITICAL PATH</span>
+              {user.sequences.map((sequence) => (
+                <div key={sequence.id} className="p-md bg-[var(--surface-container-high)] rounded-xl border border-[var(--outline-variant)] flex flex-col md:flex-row md:items-center justify-between gap-md">
+                  <div className="flex flex-col gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="font-label-caps text-label-caps text-[var(--on-surface-variant)]">{sequence.id}</span>
+                      {sequence.severity === 'critical' && (
+                        <span className="text-[var(--error)] font-bold font-code-md underline">CRITICAL PATH</span>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 mt-1">
+                      {sequence.steps
+                        .map((step, index) => (
+                          <span
+                            key={`${sequence.id}-${step}`}
+                            className={`px-3 py-1 rounded-full font-code-sm border ${
+                              sequence.severity === 'critical' && index === sequence.steps.length - 1
+                                ? 'bg-[var(--error-container)] text-[var(--error)] border-[var(--error)]'
+                                : 'bg-[var(--surface-variant)] text-[var(--on-surface)] border-[var(--outline-variant)]'
+                            }`}
+                          >
+                            {step}
+                          </span>
+                        ))
+                        .reduce((acc: ReactNode[], node, index, array) => {
+                          acc.push(node);
+                          if (index < array.length - 1) {
+                            acc.push(
+                              <span
+                                key={`${sequence.id}-arrow-${index}`}
+                                className="material-symbols-outlined text-[var(--on-surface-variant)] text-sm"
+                              >
+                                arrow_forward
+                              </span>
+                            );
+                          }
+                          return acc;
+                        }, [])}
+                    </div>
                   </div>
-                  <div className="flex flex-wrap items-center gap-2 mt-1">
-                    <span className="px-3 py-1 rounded-full bg-[var(--surface-variant)] text-[var(--on-surface)] font-code-sm border border-[var(--outline-variant)]">Console Login</span>
-                    <span className="material-symbols-outlined text-[var(--on-surface-variant)] text-sm">arrow_forward</span>
-                    <span className="px-3 py-1 rounded-full bg-[var(--surface-variant)] text-[var(--on-surface)] font-code-sm border border-[var(--outline-variant)]">IAM:AssumeRole</span>
-                    <span className="material-symbols-outlined text-[var(--on-surface-variant)] text-sm">arrow_forward</span>
-                    <span className="px-3 py-1 rounded-full bg-[var(--error-container)] text-[var(--error)] font-code-sm border border-[var(--error)]">S3:BulkDownload</span>
+                  <div className="flex items-center gap-lg">
+                    <div className="text-right">
+                      <p className="font-label-caps text-label-caps text-[var(--on-surface-variant)] mb-1">SEQ RISK</p>
+                      <span className={`font-headline-md font-bold ${sequence.severity === 'critical' ? 'text-[var(--error)] glow-error' : 'text-[var(--tertiary)]'}`}>
+                        {sequence.risk}
+                      </span>
+                    </div>
+                    {sequence.alertId ? (
+                      <Link
+                        href={`/investigation?id=${sequence.alertId}`}
+                        className="px-4 py-2 bg-[var(--surface-variant)] text-[var(--on-surface)] font-label-caps rounded-lg border border-[var(--outline-variant)] hover:bg-[var(--outline-variant)] transition-colors"
+                      >
+                        VIEW DETAILS
+                      </Link>
+                    ) : (
+                      <Link
+                        href={`/users/anomalous-sequences?id=${user.profile.id}`}
+                        className="px-4 py-2 bg-[var(--surface-variant)] text-[var(--on-surface)] font-label-caps rounded-lg border border-[var(--outline-variant)] hover:bg-[var(--outline-variant)] transition-colors"
+                      >
+                        VIEW DETAILS
+                      </Link>
+                    )}
                   </div>
                 </div>
-                <div className="flex items-center gap-lg">
-                  <div className="text-right">
-                    <p className="font-label-caps text-label-caps text-[var(--on-surface-variant)] mb-1">SEQ RISK</p>
-                    <span className="font-headline-md text-[var(--error)] font-bold glow-error">84</span>
-                  </div>
-                  <Link href="/investigation?id=A-102" className="px-4 py-2 bg-[var(--surface-variant)] text-[var(--on-surface)] font-label-caps rounded-lg border border-[var(--outline-variant)] hover:bg-[var(--outline-variant)] transition-colors">
-                    VIEW DETAILS
-                  </Link>
-                </div>
-              </div>
-
-              {/* Sequence Item 2 */}
-              <div className="p-md bg-[var(--surface-container-high)] rounded-xl border border-[var(--outline-variant)] flex flex-col md:flex-row md:items-center justify-between gap-md">
-                <div className="flex flex-col gap-2">
-                  <div className="flex items-center gap-2">
-                    <span className="font-label-caps text-label-caps text-[var(--on-surface-variant)]">SEQ-038</span>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2 mt-1">
-                    <span className="px-3 py-1 rounded-full bg-[var(--surface-variant)] text-[var(--on-surface)] font-code-sm border border-[var(--outline-variant)]">VPN Connection</span>
-                    <span className="material-symbols-outlined text-[var(--on-surface-variant)] text-sm">arrow_forward</span>
-                    <span className="px-3 py-1 rounded-full bg-[var(--surface-variant)] text-[var(--on-surface)] font-code-sm border border-[var(--outline-variant)]">EC2:DescribeInstances</span>
-                    <span className="material-symbols-outlined text-[var(--on-surface-variant)] text-sm">arrow_forward</span>
-                    <span className="px-3 py-1 rounded-full bg-[var(--surface-variant)] text-[var(--on-surface)] font-code-sm border border-[var(--outline-variant)]">RDS:DataExport</span>
-                  </div>
-                </div>
-                <div className="flex items-center gap-lg">
-                  <div className="text-right">
-                    <p className="font-label-caps text-label-caps text-[var(--on-surface-variant)] mb-1">SEQ RISK</p>
-                    <span className="font-headline-md text-[var(--tertiary)] font-bold">52</span>
-                  </div>
-                  <button className="px-4 py-2 bg-[var(--surface-variant)] text-[var(--on-surface)] font-label-caps rounded-lg border border-[var(--outline-variant)] hover:bg-[var(--outline-variant)] transition-colors">
-                    VIEW DETAILS
-                  </button>
-                </div>
-              </div>
+              ))}
             </div>
           </div>
         </div>
