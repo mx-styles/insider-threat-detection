@@ -8,11 +8,8 @@ import {
   ArrowUpRight,
   ArrowDownRight,
   Clock,
-  ChevronRight,
 } from 'lucide-react';
 import {
-  LineChart,
-  Line,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -151,7 +148,7 @@ function KPICard({ title, value, change, changeType, icon: Icon, color }: any) {
   );
 }
 
-function SeverityBadge({ severity }: { severity: string }) {
+function SeverityBadge({ severity }: Readonly<{ severity: string }>) {
   const styles: any = {
     critical: 'bg-[var(--secondary-container)]/20 border-[var(--secondary-container)] text-[var(--secondary)]',
     warning: 'bg-[var(--tertiary-container)]/20 border-[var(--tertiary-container)] text-[var(--tertiary)]',
@@ -166,6 +163,45 @@ function SeverityBadge({ severity }: { severity: string }) {
     </span>
   );
 }
+
+const getAlertLabels = (severity: string) => {
+  if (severity === 'critical') {
+    return { severityLabel: 'CRITICAL', statusLabel: 'Triage', actionLabel: 'INVESTIGATE' };
+  }
+  if (severity === 'warning') {
+    return { severityLabel: 'HIGH', statusLabel: 'Active', actionLabel: 'VIEW GRAPH' };
+  }
+  return { severityLabel: 'LOW', statusLabel: 'New', actionLabel: 'ASSIGN' };
+};
+
+const getScoreStyles = (score: number) => {
+  if (score >= 70) {
+    return {
+      textClass: 'text-[var(--error)] drop-shadow-critical',
+      barClass: 'bg-[var(--error)]',
+    };
+  }
+  if (score >= 40) {
+    return {
+      textClass: 'text-[var(--tertiary-fixed-dim)]',
+      barClass: 'bg-[var(--tertiary-fixed-dim)]',
+    };
+  }
+  return {
+    textClass: 'text-[var(--outline)]',
+    barClass: 'bg-[var(--outline)]',
+  };
+};
+
+const getSeverityBadgeClass = (severity: string) => {
+  if (severity === 'critical') {
+    return 'bg-[var(--error)]/20 text-[var(--error)] border border-[var(--error)]/50';
+  }
+  if (severity === 'warning') {
+    return 'bg-[var(--tertiary-fixed-dim)]/20 text-[var(--tertiary-fixed-dim)] border border-[var(--tertiary-fixed-dim)]/50';
+  }
+  return 'bg-[var(--outline)]/20 text-[var(--outline)] border border-[var(--outline)]/50';
+};
 
 export default function Dashboard() {
   return (
@@ -196,7 +232,7 @@ export default function Dashboard() {
         {/* Threat activity chart */}
         <div className="lg:col-span-2 bg-[var(--surface-container)] rounded-xl p-5 border border-[var(--outline-variant)] flex flex-col">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold text-[var(--on-surface)]">Threat Activity (24h)</h2>
+            <h2 className="text-lg font-semibold text-[var(--on-surface)]">Threat Activity</h2>
             <div className="flex items-center gap-4 text-sm">
               <div className="flex items-center gap-2">
                 <span className="w-3 h-3 rounded-full bg-[var(--secondary)]" />
@@ -351,11 +387,11 @@ export default function Dashboard() {
             </thead>
             <tbody className="font-code-md text-code-md text-[var(--on-surface)]">
               {recentAlerts.map((alert) => {
-                const severityLabel = alert.severity === 'critical' ? 'CRITICAL' : alert.severity === 'warning' ? 'HIGH' : 'LOW';
-                const statusLabel = alert.severity === 'critical' ? 'Triage' : alert.severity === 'warning' ? 'Active' : 'New';
-                const actionLabel = alert.severity === 'critical' ? 'INVESTIGATE' : alert.severity === 'warning' ? 'VIEW GRAPH' : 'ASSIGN';
+                const { severityLabel, statusLabel, actionLabel } = getAlertLabels(alert.severity);
                 const scoreDecimal = (alert.score / 100).toFixed(2);
                 const initials = alert.user.split('@')[0].split('.').map((n: string) => n[0].toUpperCase()).join('');
+                const scoreStyles = getScoreStyles(alert.score);
+                const severityBadgeClass = getSeverityBadgeClass(alert.severity);
 
                 return (
                   <tr
@@ -374,25 +410,13 @@ export default function Dashboard() {
                     <td className="py-3 px-md">
                       <div className="flex items-center gap-2">
                         <span
-                          className={`font-bold ${
-                            alert.score >= 70
-                              ? 'text-[var(--error)] drop-shadow-[0_0_4px_rgba(255,180,171,0.5)]'
-                              : alert.score >= 40
-                              ? 'text-[var(--tertiary-fixed-dim)]'
-                              : 'text-[var(--outline)]'
-                          }`}
+                          className={`font-bold ${scoreStyles.textClass}`}
                         >
                           {scoreDecimal}
                         </span>
                         <div className="w-16 h-1.5 bg-[var(--surface-bright)] rounded-full overflow-hidden">
                           <div
-                            className={`h-full rounded-full ${
-                              alert.score >= 70
-                                ? 'bg-[var(--error)]'
-                                : alert.score >= 40
-                                ? 'bg-[var(--tertiary-fixed-dim)]'
-                                : 'bg-[var(--outline)]'
-                            }`}
+                            className={`h-full rounded-full ${scoreStyles.barClass}`}
                             style={{ width: `${alert.score}%` }}
                           />
                         </div>
@@ -400,13 +424,7 @@ export default function Dashboard() {
                     </td>
                     <td className="py-3 px-md">
                       <span
-                        className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold ${
-                          alert.severity === 'critical'
-                            ? 'bg-[var(--error)]/20 text-[var(--error)] border border-[var(--error)]/50'
-                            : alert.severity === 'warning'
-                            ? 'bg-[var(--tertiary-fixed-dim)]/20 text-[var(--tertiary-fixed-dim)] border border-[var(--tertiary-fixed-dim)]/50'
-                            : 'bg-[var(--outline)]/20 text-[var(--outline)] border border-[var(--outline)]/50'
-                        }`}
+                        className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold ${severityBadgeClass}`}
                       >
                         {severityLabel}
                       </span>
@@ -415,7 +433,7 @@ export default function Dashboard() {
                       {alert.severity === 'warning' ? (
                         <span className="text-[var(--tertiary-fixed-dim)] flex items-center gap-1">
                           <span className="w-1.5 h-1.5 rounded-full bg-[var(--tertiary-fixed-dim)] inline-block animate-pulse" />
-                          Active
+                          <span>Active</span>
                         </span>
                       ) : (
                         <span className="text-[var(--on-surface-variant)]">{statusLabel}</span>

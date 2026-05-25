@@ -749,7 +749,7 @@ input[type=range]:focus {
   overflow: hidden;
 }
 
-@utility drop-shadow-\[0_0_4px_rgba\(255\,180\,171\,0\.5\)\] {
+.drop-shadow-critical {
   filter: drop-shadow(0 0 4px rgba(255, 180, 171, 0.5));
 }
 

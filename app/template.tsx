@@ -11,7 +11,7 @@ import {
   FileText,
   Settings,
   Search,
-  Bell,
+  UserCircle,
   Menu,
   X,
   ChevronDown,
@@ -34,6 +34,7 @@ const navigation = [
 export default function Template({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
 
   return (
     <div className="min-h-screen bg-[var(--background)]">
@@ -127,12 +128,37 @@ export default function Template({ children }: { children: React.ReactNode }) {
             </div>
             <div className="flex items-center gap-3">
               <button className="relative p-2 rounded-lg hover:bg-[var(--surface-container-high)] transition-colors">
-                <Bell className="w-5 h-5 text-[var(--on-surface-variant)]" />
-                <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-[var(--secondary)] rounded-full" />
+                <Settings className="w-5 h-5 text-[var(--on-surface-variant)]" />
               </button>
-              <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-[var(--surface-container)] rounded-lg">
-                <span className="w-2 h-2 rounded-full bg-[var(--primary)] animate-pulse" />
-                <span className="text-xs font-mono text-[var(--on-surface-variant)]">LIVE</span>
+              <div className="relative hidden sm:block">
+                <button
+                  className="p-2 rounded-lg bg-[var(--surface-container)] hover:bg-[var(--surface-container-high)] transition-colors"
+                  onClick={() => setProfileOpen((open) => !open)}
+                  aria-haspopup="menu"
+                  aria-expanded={profileOpen}
+                >
+                  <UserCircle className="w-5 h-5 text-[var(--on-surface-variant)]" />
+                </button>
+                {profileOpen && (
+                  <div className="absolute right-0 mt-2 w-56 rounded-lg border border-[var(--outline-variant)] bg-[var(--surface-container)] shadow-xl p-3 z-50">
+                    <div className="flex items-center gap-3 pb-3 border-b border-[var(--outline-variant)]">
+                      <div className="w-10 h-10 rounded-full bg-[var(--primary-container)] flex items-center justify-center">
+                        <span className="text-xs font-semibold text-[var(--on-primary)]">JD</span>
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-[var(--on-surface)] truncate">Jonathan Doe</p>
+                        <p className="text-xs text-[var(--on-surface-variant)]">SOC Analyst</p>
+                        <p className="text-xs text-[var(--on-surface-variant)] truncate">jonathan.doe@company.com</p>
+                      </div>
+                    </div>
+                    <button
+                      className="mt-3 w-full px-3 py-2 rounded-md border border-[var(--outline-variant)] text-[var(--on-surface)] text-sm hover:bg-[var(--surface-container-high)] transition-colors"
+                      onClick={() => setProfileOpen(false)}
+                    >
+                      Log out
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           </div>
